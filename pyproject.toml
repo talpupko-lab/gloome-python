@@ -1,0 +1,16 @@
+[project]
+name = "gloome"
+version = "0.1.0"
+description = "GLOOME: Gain Loss Mapping Engine"
+dependencies = [
+    "numpy",
+    "validate_email",
+    "flask",
+    "pandas",
+    "scipy",
+    "networkx",
+    "matplotlib",
+    "d3blocks",
+    "Bio",
+    "dotenv"]
+requires-python = ">=3.9"
