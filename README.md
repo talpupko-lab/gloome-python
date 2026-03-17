@@ -17,7 +17,8 @@ Advanced optimization options
 Likelihood and parsimony-based output
 
 ### Project structure
-```
+
+```Project structure
 gloome
 ├── gloome
 │   ├── data
@@ -54,9 +55,9 @@ This manual provides comprehensive Gloome on input formats, command-line usage, 
 ### Program Execution
 To get the project working, you need to run the command "python -m gloome" in the terminal with the following parameters:
 
-Required parameters:
+#### Required parameters:
 
-```
+```Required parameters
     --msa_file <type=str>
         Specify the msa filepath.
 
@@ -64,9 +65,9 @@ Required parameters:
         Specify the newick filepath.
 ```
 
-Optional parameters:
+#### Optional parameters:
 
-```
+```Optional parameters
     --out_dir <type=str>
         Specify the outdir path.
 
