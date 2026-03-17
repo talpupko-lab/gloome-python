@@ -20,34 +20,63 @@ GLOOME.CoPAP.gainLoss.Manual.pdf
 
 ### Project structure
 gloome
+
 ├── gloome
+
 │   ├── data
+
 │   │   └── initial_data
+
 │   │       ├── tree
+
 │   │       │   ├── newickTree0.tree
+
 │   │       │   └── newickTree1.tree
+
 │   │       └── msa
+
 │   │           ├── patternMSA0.msa
+
 │   │           └── patternMSA1.msa
+
 │   ├── services
+
 │   │   ├── __init__.py
+
 │   │   ├── design_functions.py
+
 │   │   └── service_functions.py
+
 │   ├── tree
+
 │   │   ├── __init__.py
+
 │   │   ├── node.py
+
 │   │   └── tree.py
+
 │   ├── __init__.py
+
 │   ├── __main__.py
+
 │   ├── config.py
+
 │   ├── consts.py
+
 │   └── utils.py
+
 ├── logs
+
 ├── results
+
 │   ├── out
+
 │   └── in
+
 ├── pyproject.toml
+
 └── README.md
+
 
 This manual provides comprehensive Gloome on installation, input formats, command-line usage, interpretation of results, and troubleshooting.
 
