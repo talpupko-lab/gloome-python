@@ -65,14 +65,17 @@ To get the project working, you need to run the command "python -m gloome" in th
 
 Required parameters:
 
+```
     --msa_file <type=str>
         Specify the msa filepath.
 
     --tree_file <type=str>
         Specify the newick filepath.
+```
 
 Optional parameters:
 
+```
     --out_dir <type=str>
         Specify the outdir path.
 
@@ -137,6 +140,7 @@ Optional parameters:
 
     --is_do_not_use_e_mail <type=int> 
         Specify is_do_not_use_e_mail (technical parameter, do not change).
+```
 
 ### Citing
 If you use the GLOOME web server for your research, please make sure to cite the following publication:
