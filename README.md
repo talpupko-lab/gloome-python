@@ -58,6 +58,7 @@ GNU Compiler (gcc/g++)
 
 To install the project, you need to run the command "pip install gloome" in the terminal.
 
+###Program Execution
 To get the project working, you need to run the command "python -m gloome" in the terminal with the following parameters:
 
 Required parameters:
@@ -135,14 +136,14 @@ Optional parameters:
     --is_do_not_use_e_mail <type=int> 
         Specify is_do_not_use_e_mail (technical parameter, do not change).
 
-Citing
+###Citing
 If you use the GLOOME web server for your research, please make sure to cite the following publication:
 
 Cohen, O., Ashkenazy, H., Belinky, F., Huchon, D., and Pupko, T. 2010. GLOOME: gain loss mapping engine. Bioinformatics 26(22):2914-2915. [pdf] [abs]
 
-BibTeX
+###BibTeX
 Proper citation helps support the development and maintenance of this tool.
 
-Contact
+###Contact
 For questions, issues, or contributions, please open an issue on the repository or contact the maintainer directly.
 
