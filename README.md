@@ -15,8 +15,6 @@ Gain and loss inference using stochastic mapping or maximum parsimony
 Estimation of gain/loss rates per character
 Advanced optimization options
 Likelihood and parsimony-based output
-A full user manual is included in the release:
-GLOOME.CoPAP.gainLoss.Manual.pdf
 
 ### Project structure
 ```
@@ -51,14 +49,7 @@ gloome
 └── README.md
 ```
 
-This manual provides comprehensive Gloome on installation, input formats, command-line usage, interpretation of results, and troubleshooting.
-
-### Installation
-Requirements
-UNIX/Linux system
-GNU Compiler (gcc/g++)
-
-To install the project, you need to run the command "pip install gloome" in the terminal.
+This manual provides comprehensive Gloome on input formats, command-line usage, interpretation of results, and troubleshooting.
 
 ### Program Execution
 To get the project working, you need to run the command "python -m gloome" in the terminal with the following parameters:
