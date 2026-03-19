@@ -42,10 +42,6 @@ gloome
 │   ├── config.py
 │   ├── consts.py
 │   └── utils.py
-├── logs
-├── results
-│   ├── out
-│   └── in
 ├── pyproject.toml
 └── README.md
 ```
