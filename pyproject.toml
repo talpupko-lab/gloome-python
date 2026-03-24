@@ -8,7 +8,7 @@ version = "2.0.1"
 description = "GLOOME: Gain Loss Mapping Engine"
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{name = "Rodion Polonskyi"}]
+authors = [{ name="Rodion Polonskyi", email="rodion@tauex.tau.ac.il" }, ]
 
 dependencies = [
     "biopython>=1.85",
@@ -17,7 +17,7 @@ dependencies = [
     "networkx>=3.0",
     "numpy>=1.20,<2.0",
     "pandas>=2.0",
-    "python-dotenv>=1.1.0",
+    "python-dotenv>=1.0.0",
     "scipy>=1.10"
 ]
 

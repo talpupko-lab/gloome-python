@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
+import re
 
 from shutil import rmtree
 from json import loads, dumps
@@ -318,10 +319,11 @@ class Tree:
                     newick_node.distance_to_root_vector = [0.0]
                     newick_node.level = 1
                     self.root = newick_node
-
                 self.__set_children_list_from_string(dict_children.get('children'), newick_node, num)
             for current_node in self.get_list_nodes_info(only_node_list=True):
                 current_node.set_levels_and_distance_to_nearest()
+                if current_node.node_type in ('node', ) and self.is_bootstrap_value(current_node.name):
+                    current_node.name = 'nd' + str(num()).rjust(4, '0')
 
             return self
 
@@ -963,6 +965,13 @@ class Tree:
         return gamma.ppf(probability_vector, a=self.alpha, scale=1/self.alpha)
 
     @staticmethod
+    def is_bootstrap_value(number_str: str, lower: Union[float, np.ndarray, int] = 0,
+                           upper: Union[float, np.ndarray, int] = 100) -> bool:
+        re_result = bool(re.fullmatch(r'^-?\d+(\.\d+)?$', number_str)) if len(number_str.strip()) else False
+
+        return lower <= float(number_str) <= upper if re_result else False
+
+    @staticmethod
     def get_columns(mode: str = 'node', columns: Optional[Dict[str, str]] = None,
                     taking_into_coefficient: bool = True) -> Tuple[Dict[str, str], Tuple[str, ...], int]:
 
@@ -1126,9 +1135,9 @@ class Tree:
         newick_tree = Tree.check_tree(newick_tree)
         nodes_list = newick_tree.get_list_nodes_info(filters={'node_type': ['root', 'node']}, only_node_list=True,
                                                      mode='pre-order')
-        if nodes_list[-1].name == 'nd0001':
-            num = newick_tree.__counter()
-            for current_node in nodes_list:
+        num = newick_tree.__counter()
+        for current_node in nodes_list:
+            if re.fullmatch(r'^nd\d{4}$', current_node.name):
                 current_node.name = f'{node_name}{str(num()).rjust(number_length, fill_character)}'
 
         return newick_tree
