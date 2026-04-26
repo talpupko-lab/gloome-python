@@ -21,14 +21,6 @@ Likelihood and parsimony-based output
 ```Project structure
 gloome
 ├── gloome
-│   ├── data
-│   │   └── initial_data
-│   │       ├── tree
-│   │       │   ├── newickTree0.tree
-│   │       │   └── newickTree1.tree
-│   │       └── msa
-│   │           ├── patternMSA0.msa
-│   │           └── patternMSA1.msa
 │   ├── services
 │   │   ├── __init__.py
 │   │   ├── design_functions.py
@@ -36,6 +28,7 @@ gloome
 │   ├── tree
 │   │   ├── __init__.py
 │   │   ├── node.py
+│   │   ├── npencoder.py
 │   │   └── tree.py
 │   ├── __init__.py
 │   ├── __main__.py
@@ -49,7 +42,7 @@ gloome
 This manual provides comprehensive Gloome on input formats, command-line usage, interpretation of results, and troubleshooting.
 
 ### Program Execution
-To get the project working, you need to run the command "python -m gloome" in the terminal with the following parameters:
+To get the project working, you need to run the command "gloome" or "python3 -m gloome" or "python -m gloome" in the terminal with the following parameters:
 
 #### Required parameters:
 

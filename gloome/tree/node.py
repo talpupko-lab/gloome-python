@@ -6,7 +6,7 @@ from scipy.linalg import expm
 from math import log, prod
 from json import loads, dumps
 
-from gloome.jsonNpEncoder.npencoder import NpEncoder as npEncode
+from .npencoder import NpEncoder
 
 eps = 5e-324
 
@@ -101,26 +101,26 @@ class Node:
                 'branch_probability_vector', 'probability_vector_gain', 'probability_vector_loss', 'sequence',
                 'probabilities_sequence_characters', 'ancestral_sequence']
 
-    def get_list_nodes_info(self, with_additional_details: bool = False, mode: Optional[str] = None, filters:
-                            Optional[Dict[str, List[Union[float, int, str, List[float]]]]] = None, only_node_list:
-                            bool = False) -> List[Union[Dict[str, Union[float, np.ndarray, bool, str, List[float],
-                                                  List[np.ndarray]]], 'Node']]:
+    def get_list_nodes_info(self, with_additional_details: bool = False,
+                            mode: Optional[str] = None,
+                            filters: Optional[Dict[str, List[Union[float, int, str, List[float]]]]] = None,
+                            only_node_list: bool = False
+                            ) -> List[Union[Dict[str, Union[float, np.ndarray, bool, str, List[float],
+                                      List[np.ndarray]]], 'Node']]:
         """
-        Retrieve a list of descendant nodes from a given node, including the node itself or retrieve a list of
-        descendant nodes from the current instance of the `Tree` class.
+        Retrieve a list of descendant nodes from a given node, including the node itself.
 
-        This function collects all child nodes of the specified `node`, including the `node` itself, or collects all
-        child nodes of the current instance of the `Tree` class if `node` is not provided. The function
-        returns these nodes names as a list.
+        This function collects all child nodes of the specified `node`, including the `node` itself. The function
+        returns a list of nodes or a list of dictionaries with information about these nodes.
 
         Args:
             with_additional_details (bool, optional): `False` (default).
-            mode (Optional[str]): `None` (default), 'pre-order', 'in-order', 'post-order', 'level-order'.
+            mode (str, optional): None (default), 'pre-order', 'in-order', 'post-order', 'level-order'.
             filters (Dict, optional):
             only_node_list (Dict, optional): `False` (default).
         Returns:
-            list: A list of nodes names including the specified `node` (or the current instance's nodes  names) and its
-                                    children.
+            list: A list of descendant nodes from a given node, including the node itself or a list of dictionaries
+            with information about these nodes.
         """
         list_result = []
         mode = 'pre-order' if mode is None or mode.lower() not in ('pre-order', 'in-order', 'post-order', 'level-order'
@@ -130,7 +130,7 @@ class Node:
         def get_list(trees_node: Node) -> None:
             nonlocal list_result, filters, mode, condition
 
-            nodes_info = trees_node.get_nodes_info()
+            nodes_info = trees_node.get_node_info()
             list_item = trees_node if only_node_list else nodes_info
             if trees_node.check_filter_compliance(filters, nodes_info):
                 if mode == 'pre-order':
@@ -155,8 +155,8 @@ class Node:
             nodes_list = [self]
             while nodes_list:
                 newick_node = nodes_list.pop(0)
-                if newick_node.check_filter_compliance(filters, newick_node.get_nodes_info()):
-                    level_order_item = newick_node if only_node_list else newick_node.get_nodes_info()
+                if newick_node.check_filter_compliance(filters, newick_node.get_node_info()):
+                    level_order_item = newick_node if only_node_list else newick_node.get_node_info()
                     list_result.append(level_order_item if condition else newick_node.name)
 
                 for nodes_child in newick_node.children:
@@ -166,7 +166,7 @@ class Node:
 
         return list_result
 
-    def get_nodes_info(self) -> Dict[str, Union[float, np.ndarray, bool, str, List[float], List[np.ndarray]]]:
+    def get_node_info(self) -> Dict[str, Union[float, np.ndarray, bool, str, List[float], List[np.ndarray]]]:
 
         result = {'node': self.name,
                   'distance': self.distance_to_father,
@@ -205,7 +205,7 @@ class Node:
                   'coefficient_bl': self.coefficient_bl,
                   'pmatrix': self.pmatrix}
 
-        return loads(dumps(result, cls=npEncode))
+        return loads(dumps(result, cls=NpEncoder))
 
     def get_node_by_name(self, node_name: str) -> Optional['Node']:
         if node_name == self.name:
@@ -232,7 +232,7 @@ class Node:
             current_marginal_bl_vector = []
             for j in range(self.alphabet_size):
                 for i in range(self.alphabet_size):
-                    current_marginal_bl_vector.append(self.frequency[j] * self.up_vector[r][j] *
+                    current_marginal_bl_vector.append(self.frequency[i] * self.up_vector[r][j] *
                                                       self.pmatrix[r][i, j] * self.down_vector[r][i])
             self.marginal_bl_vector.append(current_marginal_bl_vector)
 
@@ -257,8 +257,8 @@ class Node:
             for j in range(self.alphabet_size):
                 marg = 0
                 for i in range(self.alphabet_size):
-                    marg += self.pmatrix[r][i, j] * self.down_vector[r][i]
-                current_marginal_vector.append(self.frequency[j] * self.up_vector[r][j] * marg)
+                    marg += self.frequency[i] * self.pmatrix[r][i, j] * self.down_vector[r][i]
+                current_marginal_vector.append(self.up_vector[r][j] * marg)
             self.marginal_vector.append(current_marginal_vector)
 
         likelihood = (np.sum([np.sum(self.marginal_vector[r]) for r in range(self.rate_vector_size)]) /
@@ -337,9 +337,10 @@ class Node:
                                 {brother.name:
                                  probabilities.get(brother.name, 0) + (brother.pmatrix[r][j, i] *
                                                                        brother.up_vector[r][i])})
-                        probabilities.update(
-                            {father.name: probabilities.get(father.name, 0) + (father.pmatrix[r][i, j] *
-                                                                               father.down_vector[r][i])})
+                        if father.father:
+                            probabilities.update(
+                                {father.name: probabilities.get(father.name, 0) + (father.pmatrix[r][j, i] *
+                                                                                   father.down_vector[r][i])})
 
                     current_down_vector.append(prod(probabilities.values()))
                 self.down_vector.append(current_down_vector)
@@ -420,9 +421,9 @@ class Node:
     def get_distance_to_father(self, taking_into_coefficient: bool) -> Union[float, np.ndarray]:
         return self.distance_to_father * self.coefficient_bl if taking_into_coefficient else self.distance_to_father
 
-    def subtree_to_newick(self, with_internal_nodes: bool = False, decimal_length: int = 0,
+    def subtree_to_newick(self, with_internal_nodes: bool = False,
+                          decimal_length: int = 0,
                           taking_into_coefficient: bool = False) -> str:
-        """This method is for internal use only."""
         node_list = self.children
         if node_list:
             result = '('

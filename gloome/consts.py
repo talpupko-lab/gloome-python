@@ -1,16 +1,13 @@
-from os import getenv, chdir
 from sys import argv
 from typing import List, Tuple, Union
-from dotenv import load_dotenv
 from types import FunctionType, MethodType
 from pathlib import Path
 from urllib import parse
 from importlib.resources import files
 
 from gloome.tree.tree import Tree
-from gloome.services.service_functions import check_data, execute_all_actions, recompile_json
+from gloome.services.service_functions import check_data, execute_all_actions, recompile_json, del_bootstrap_values
 
-load_dotenv()
 MODE = ['draw_tree', 'compute_likelihood_of_tree', 'create_all_file_types', 'execute_all_actions']
 IS_PRODUCTION = True
 MAX_CONTENT_LENGTH = 16 * 1000 * 1000 * 1000
@@ -35,11 +32,6 @@ IN_DIR = RESULTS_DIR.joinpath('in')
 OUT_DIR = RESULTS_DIR.joinpath('out')
 LOGS_DIR = BIN_DIR.joinpath('logs')
 TMP_DIR = BIN_DIR.joinpath('tmp')
-# APP_DIR = BIN_DIR.joinpath('app')
-# TEMPLATES_DIR = APP_DIR.joinpath('templates')
-# STATIC_DIR = APP_DIR.joinpath('static')
-# ERROR_TEMPLATE = TEMPLATES_DIR.joinpath('404.html')
-ENV = BIN_DIR.joinpath('.env')
 
 ENVIRONMENT_DIR = BIN_DIR.joinpath('gloome_env2')
 ENVIRONMENT_ACTIVATE = f'mamba activate {ENVIRONMENT_DIR}'
@@ -48,58 +40,32 @@ GLOOME_DIR = files('gloome')
 DATA_DIR = GLOOME_DIR.joinpath('data')
 INITIAL_DATA_DIR = DATA_DIR.joinpath('initial_data')
 
-# HTTPDOCS_DIR = Path('/var/www/vhosts/gloome.tau.ac.il/httpdocs/')
-# chdir(HTTPDOCS_DIR if HTTPDOCS_DIR.exists() else BIN_DIR)
-
 MSA_FILE_NAME = 'msa_file.msa'
 TREE_FILE_NAME = 'tree_file.tree'
 
 REQUEST_WAITING_TIME = 20
 REQUESTS_NUMBER = 24 * 60 * 60 * 3 / REQUEST_WAITING_TIME
 
-if ENV.exists():
-    UNDER_CONSTRUCTION = int(getenv('UNDER_CONSTRUCTION'))
-    SECRET_KEY = getenv('SECRET_KEY')
-    TOKEN = getenv('TOKEN')
-    ACCOUNT = getenv('ACCOUNT')
-    PARTITION = getenv('PARTITION')
-    USE_OLD_SUBMITER = int(getenv('USE_OLD_SUBMITER'))
+UNDER_CONSTRUCTION = False
+SECRET_KEY = ''
+TOKEN = ''
+PARTITION = ''
+USE_OLD_SUBMITER = 0
 
-    LOGIN_NODE_URLS = getenv('LOGIN_NODE_URLS')
-    USER_NAME = getenv('USER_NAME')
-    USER_ID = getenv('USER_ID')
-    USER_PASSWORD = getenv('USER_PASSWORD')
-    ADMIN_EMAIL = getenv('ADMIN_EMAIL')
-    SMTP_SERVER = getenv('SMTP_SERVER')
-    SMTP_PORT = int(getenv('SMTP_PORT'))
-    REPORT_RECEIVERS = getenv('REPORT_RECEIVERS').split()
+LOGIN_NODE_URLS = ''
+USER_NAME = ''
+USER_ID = ''
+USER_PASSWORD = ''
+ADMIN_EMAIL = ''
+SMTP_SERVER = ''
+SMTP_PORT = 0
+REPORT_RECEIVERS = []
 
-    DEV_EMAIL = getenv('DEV_EMAIL')
-    ADMIN_USER_NAME = getenv('ADMIN_USER_NAME')
-    ADMIN_PASSWORD = getenv('ADMIN_PASSWORD')
-    SEND_EMAIL_DIR_IBIS = getenv('SEND_EMAIL_DIR_IBIS')
-    OWNER_EMAIL = getenv('OWNER_EMAIL')
-else:
-    UNDER_CONSTRUCTION = False
-    SECRET_KEY = ''
-    TOKEN = ''
-    PARTITION = ''
-    USE_OLD_SUBMITER = 0
-
-    LOGIN_NODE_URLS = ''
-    USER_NAME = ''
-    USER_ID = ''
-    USER_PASSWORD = ''
-    ADMIN_EMAIL = ''
-    SMTP_SERVER = ''
-    SMTP_PORT = 0
-    REPORT_RECEIVERS = []
-
-    DEV_EMAIL = ''
-    ADMIN_USER_NAME = ''
-    ADMIN_PASSWORD = ''
-    SEND_EMAIL_DIR_IBIS = ''
-    OWNER_EMAIL = ''
+DEV_EMAIL = ''
+ADMIN_USER_NAME = ''
+ADMIN_PASSWORD = ''
+SEND_EMAIL_DIR_IBIS = ''
+OWNER_EMAIL = ''
 
 
 class Actions:
@@ -175,30 +141,28 @@ DEFAULT_ARGUMENTS = DefaultArgs(**{
 DEFAULT_ARGUMENTS.update(DEFAULT_FORM_ARGUMENTS)
 
 ACTIONS = Actions(**{
+                     'del_bootstrap_values': del_bootstrap_values,
                      'check_data': check_data,
+                     'set_root': Tree.get_root_by_midpoint,
                      'check_tree': Tree.rename_nodes,
                      'set_tree_data': Tree.set_tree_data,
-                     # 'compute_likelihood_of_tree': compute_likelihood_of_tree,
                      'calculate_tree': Tree.calculate_tree,
                      'calculate_ancestral_sequence': Tree.calculate_ancestral_sequence,
-                     # 'draw_tree': draw_tree,
-                     # 'create_all_file_types': create_all_file_types,
                      'execute_all_actions': execute_all_actions,
                      'recompile_json': recompile_json
                      })
 
 VALIDATION_ACTIONS = {
+    'del_bootstrap_values': True,
     'check_data': True,
+    'set_root': True,
     'check_tree': True
     }
 
 DEFAULT_ACTIONS = {
     'set_tree_data': True,
     'calculate_tree': False,
-    # 'compute_likelihood_of_tree': False,
     'calculate_ancestral_sequence': False,
-    # 'draw_tree': False,
-    # 'create_all_file_types': False,
     'execute_all_actions': False
     }
 

@@ -1,3 +1,4 @@
+from os import chdir
 import datetime
 import logging
 
@@ -9,14 +10,6 @@ from gloome.consts import *
 formatter = logging.Formatter('%(asctime)s[%(levelname)s][%(filename)s][%(funcName)s]: %(message)s')
 
 
-# init_dir_path()
-# logging_file_name = LOGS_DIR.joinpath(datetime.datetime.now().strftime('%Y_%m_%d_%H_%M.log'))
-# FORMAT = '%(asctime)s[%(levelname)s][%(filename)s][%(funcName)s]: %(message)s'
-# formatter = logging.Formatter('%(asctime)s[%(levelname)s][%(filename)s][%(funcName)s]: %(message)s')
-# logging.basicConfig(filename=logging_file_name, level=logging.WARNING, format=FORMAT)
-# logger = logging.getLogger('main')
-#
-#
 def init_dir_path():
     chdir(LOGS_DIR)
 

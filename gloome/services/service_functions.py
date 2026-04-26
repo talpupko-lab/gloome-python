@@ -7,11 +7,9 @@ from typing import Callable, Any
 from datetime import timedelta
 from shutil import make_archive, move
 from numpy import ndarray
-# from validate_email import validate_email
-# from flask import url_for
+from typing import Union, Tuple, Optional, Dict, List
 
 from gloome.tree.tree import Tree
-from gloome.services.design_functions import *
 
 SELECTED_FILES = {'file_interactive_tree_html': True,
                   'file_newick_tree_png': True,
@@ -142,7 +140,6 @@ def execute_all_actions(newick_tree: Union[str, Tree], file_path: Union[str, Pat
 
 
 def compute_likelihood_of_tree(newick_tree: Union[str, Tree]) -> Union[List[Union[float, ndarray]], str]:
-
     newick_tree.calculate_likelihood()
     result = [newick_tree.log_likelihood]
 
@@ -157,11 +154,6 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
     result = {}
     newick_tree = Tree.check_tree(newick_tree)
     taking_into_coefficient = newick_tree.coefficient_bl != 1
-    # result.update(newick_tree.tree_to_graph(f'{file_path}/graph.txt', ('dot', 'png', 'svg')))
-    # result.update(newick_tree.tree_to_visual_format(f'{file_path}/visual_tree.svg', True, ('txt', 'png', 'svg')))
-    # result.update({'Newick text (tree)': newick_tree.tree_to_newick_file(f'{file_path}/newick_tree.tree', True)})
-    # table = newick_tree.tree_to_table(columns=columns, list_type=list, lists=lists, distance_type=float)
-    # result.update({'Fasta (fasta)': newick_tree.tree_to_fasta_file(f'{file_path}/fasta_file.fasta')})
     if selected_files.get('file_interactive_tree_html', False):
         result.update({'Interactive tree (html)':
                        newick_tree.tree_to_interactive_html(f'{file_path}/InteractiveTree.html',
@@ -222,9 +214,20 @@ def convert_seconds(seconds: float) -> str:
     return str(timedelta(seconds=seconds))
 
 
-def get_error(err_list: List[Tuple[str, str]]) -> str:
-    return ''.join([f'{key_design(error_type, True, 14)}'
-                    f'{value_design(error, True, 14)}\n' for error_type, error in err_list])
+def del_bootstrap_values(newick_text: str) -> str:
+    pattern = r'\)(100|[1-9]\d|\d)(?=[;:, \)])'
+    matches_list = re.findall(pattern, newick_text)
+    matches_list.sort()
+    matches_set = set(matches_list)
+    list_length = len(matches_list)
+    set_length = len(matches_set)
+
+    if any((list_length != set_length,
+            all((matches_list != list(range(1, list_length + 1)),
+                 matches_list != list(range(0, list_length)))))):
+        newick_text = re.sub(pattern, lambda x: ')', newick_text)
+
+    return newick_text
 
 
 def check_data(*args) -> List[Tuple[str, str]]:
@@ -356,6 +359,7 @@ def check_data(*args) -> List[Tuple[str, str]]:
         else:
             try:
                 current_tree = Tree(newick_text)
+                Tree.rename_nodes(current_tree)
             except ValueError:
                 current_tree = None
 
@@ -427,21 +431,4 @@ def get_response_design(json_object: Optional[Any], action_name: str, create_lin
     if 'create_all_file_types' in action_name and create_link:
         if output_file:
             json_object.update({'json response file (json)': output_file})
-        # json_object = link_design(json_object)
-        # json_object = result_design(json_object, change_value='compute_likelihood_of_tree' in action_name,
-        #                             change_value_style=False, change_key=True, change_key_style=False)
     return json_object
-
-
-# def link_design(json_object: Any) -> Any:
-#     for key, value in json_object.items():
-#         if key == 'execution_time':
-#             continue
-#         print(key)
-#         json_object.update(
-#             {f'{key}': [f'<a class="w-auto mw-auto form-control btn btn-outline-link rounded-pill" href="'
-#                         f'{url_for("get_file", file_path=value, mode="download")}" '
-#                         f'target="_blank">download</a>',
-#                         f'<a class="w-auto mw-auto form-control btn btn-outline-link rounded-pill" href="'
-#                         f'{url_for("get_file", file_path=value, mode="view")}" target="_blank">view</a>']})
-#     return json_object
