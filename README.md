@@ -82,6 +82,18 @@ To get the project working, you need to run the command "gloome" or "python3 -m 
 
     --coefficient_bl <type=float> 
         Specify coefficient_bl. Default is 1.0.
+        
+    --probability_lg <type=float> 
+        Specify probability_lg. Default is 0.9.
+    
+    --number_lg <type=float> 
+        Specify number_lg. Default is 5.
+    
+    --number_datasets <type=float> 
+        Specify number_datasets. Default is 100.
+    
+    --is_do_not_use_copap <type=int> 
+        Specify is_do_not_use_copap. Default is 0.
 
     --is_optimize_pi <type=int> 
         Specify is_optimize_pi. Default is 1.
@@ -101,8 +113,32 @@ To get the project working, you need to run the command "gloome" or "python3 -m 
     --file_newick_tree_png <type=int> 
         Specify file_newick_tree_png. Default is 0.
 
+    --file_table_of_coevolution_tsv <type=int> 
+        Specify file_table_of_coevolution_tsv. Default is 1.
+
+    --file_simulated_datasets_fastas <type=int> 
+        Specify file_simulated_datasets_fastas. Default is 1.
+
+    --file_barplot_of_correlation_svg <type=int> 
+        Specify file_barplot_of_correlation_svg. Default is 1.
+
+    --file_plot_distribution_of_correlation_svg <type=int> 
+        Specify file_plot_distribution_of_correlation_svg. Default is 1.
+
+    --file_plot_correlation_by_rate_bin_svg <type=int> 
+        Specify file_plot_correlation_by_rate_bin_svg. Default is 1.
+
+    --file_table_of_posterior_rates_tsv <type=int> 
+        Specify file_table_of_posterior_rates_tsv. Default is 1.
+
+    --file_table_of_pearson_correlation_tsv <type=int> 
+        Specify file_table_of_pearson_correlation_tsv. Default is 1.
+
     --file_table_of_nodes_tsv <type=int> 
         Specify file_table_of_nodes_tsv. Default is 1.
+
+    --file_branch_position_probabilities_tsv <type=int>  
+        Specify file_branch_position_probabilities_tsv. Default is 1.
 
     --file_table_of_branches_tsv <type=int> 
         Specify file_table_of_branches_tsv. Default is 1.
@@ -112,6 +148,9 @@ To get the project working, you need to run the command "gloome" or "python3 -m 
 
     --file_table_of_attributes_tsv <type=int> 
         Specify file_table_of_attributes_tsv. Default is 1.
+
+    --file_table_of_parsimony_and_homoplasy_scores_tsv <type=int> 
+        Specify file_table_of_parsimony_and_homoplasy_scores_tsv. Default is 1.
 
     --file_phylogenetic_tree_nwk <type=int> 
         Specify file_phylogenetic_tree_nwk. Default is 1.

@@ -2,11 +2,10 @@ from sys import argv
 from typing import List, Tuple, Union
 from types import FunctionType, MethodType
 from pathlib import Path
-from urllib import parse
 from importlib.resources import files
 
 from gloome.tree.tree import Tree
-from gloome.services.service_functions import check_data, execute_all_actions, recompile_json, del_bootstrap_values
+from gloome.services.service_functions import check_data, execute_all_actions
 
 MODE = ['draw_tree', 'compute_likelihood_of_tree', 'create_all_file_types', 'execute_all_actions']
 ROOTING_METHODS = [('mad', 'Minimal Ancestor Deviation'), ('mvr', 'Minimum Variance Rooting'),
@@ -17,15 +16,7 @@ PREFIX = '/'
 APPLICATION_ROOT = PREFIX
 DEBUG = not IS_PRODUCTION
 
-PREFERRED_URL_SCHEME = 'https'
 WEBSERVER_NAME_CAPITAL = 'Gloome'
-WEBSERVER_NAME = 'gloome.tau.ac.il'
-WEBSERVER_URL = f'{PREFERRED_URL_SCHEME}://{WEBSERVER_NAME}'
-RESULTS_URL = parse.urljoin(WEBSERVER_URL, 'results')
-LOG_URL = WEBSERVER_URL
-
-WEBSERVER_TITLE = '<b>GLOOME Server - Gain Loss Mapping Engine</b>'
-MODULE_LOAD = 'module load mamba/mamba-1.5.8'
 
 GLOOME = Path('/gloome')
 BIN_DIR = GLOOME if GLOOME.exists() else Path.cwd()
@@ -35,39 +26,12 @@ OUT_DIR = RESULTS_DIR.joinpath('out')
 LOGS_DIR = BIN_DIR.joinpath('logs')
 TMP_DIR = BIN_DIR.joinpath('tmp')
 
-ENVIRONMENT_DIR = BIN_DIR.joinpath('gloome_env2')
-ENVIRONMENT_ACTIVATE = f'mamba activate {ENVIRONMENT_DIR}'
-
 GLOOME_DIR = files('gloome')
 DATA_DIR = GLOOME_DIR.joinpath('data')
 INITIAL_DATA_DIR = DATA_DIR.joinpath('initial_data')
 
 MSA_FILE_NAME = 'msa_file.msa'
 TREE_FILE_NAME = 'tree_file.tree'
-
-REQUEST_WAITING_TIME = 20
-REQUESTS_NUMBER = 24 * 60 * 60 * 3 / REQUEST_WAITING_TIME
-
-UNDER_CONSTRUCTION = False
-SECRET_KEY = ''
-TOKEN = ''
-PARTITION = ''
-USE_OLD_SUBMITER = 0
-
-LOGIN_NODE_URLS = ''
-USER_NAME = ''
-USER_ID = ''
-USER_PASSWORD = ''
-ADMIN_EMAIL = ''
-SMTP_SERVER = ''
-SMTP_PORT = 0
-REPORT_RECEIVERS = []
-
-DEV_EMAIL = ''
-ADMIN_USER_NAME = ''
-ADMIN_PASSWORD = ''
-SEND_EMAIL_DIR_IBIS = ''
-OWNER_EMAIL = ''
 
 
 class Actions:
@@ -119,22 +83,33 @@ DEFAULT_FORM_ARGUMENTS = {
     'alpha': 0.5,
     'pi_1': 0.5,
     'coefficient_bl': 1.0,
-    'e_mail': '',
+    'probability_lg': 0.5,
+    'number_lg': 1,
+    'number_datasets': 100,
     'rooting_method': ROOTING_METHODS[2][0],
     'rooting_methods': ROOTING_METHODS,
     'leaf': '',
+    'leaves': [],
     'is_optimize_pi': True,
     'is_optimize_pi_average': False,
     'is_optimize_alpha': True,
     'is_optimize_bl': True,
-    'is_do_not_use_e_mail': True,
+    'is_do_not_use_copap': False,
     'file_interactive_tree_html': False,
     'file_newick_tree_png': False,
+    'file_table_of_coevolution_tsv': True,
+    'file_simulated_datasets_fastas': True,
+    'file_barplot_of_correlation_svg': True,
+    'file_plot_distribution_of_correlation_svg': True,
+    'file_plot_correlation_by_rate_bin_svg': True,
+    'file_table_of_posterior_rates_tsv': True,
+    'file_table_of_pearson_correlation_tsv': True,
     'file_table_of_nodes_tsv': True,
-    'file_probability_per_pos_per_branches_tsv': True,
+    'file_branch_position_probabilities_tsv': True,
     'file_table_of_branches_tsv': True,
     'file_log_likelihood_tsv': True,
     'file_table_of_attributes_tsv': True,
+    'file_table_of_parsimony_and_homoplasy_scores_tsv': True,
     'file_phylogenetic_tree_nwk': True
 }
 
@@ -146,15 +121,15 @@ DEFAULT_ARGUMENTS = DefaultArgs(**{
 DEFAULT_ARGUMENTS.update(DEFAULT_FORM_ARGUMENTS)
 
 ACTIONS = Actions(**{
-                     'del_bootstrap_values': del_bootstrap_values,
+                     'del_bootstrap_values': Tree.del_bootstrap_values,
                      'check_data': check_data,
                      'set_root': Tree.set_root,
                      'check_tree': Tree.rename_nodes,
                      'set_tree_data': Tree.set_tree_data,
                      'calculate_tree': Tree.calculate_tree,
                      'calculate_ancestral_sequence': Tree.calculate_ancestral_sequence,
-                     'execute_all_actions': execute_all_actions,
-                     'recompile_json': recompile_json
+                     'calculate_correlation': Tree.calculate_correlation,
+                     'execute_all_actions': execute_all_actions
                      })
 
 VALIDATION_ACTIONS = {
@@ -168,6 +143,7 @@ DEFAULT_ACTIONS = {
     'set_tree_data': True,
     'calculate_tree': False,
     'calculate_ancestral_sequence': False,
+    'calculate_correlation': False,
     'execute_all_actions': False
     }
 
@@ -206,6 +182,14 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify pi_1. Default is 0.5.
 \t\t--coefficient_bl <type=float> 
 \t\t\tSpecify coefficient_bl. Default is 1.0.
+\t\t--probability_lg <type=float> 
+\t\t\tSpecify probability_lg. Default is 0.9.
+\t\t--number_lg <type=float> 
+\t\t\tSpecify number_lg. Default is 5.
+\t\t--number_datasets <type=float> 
+\t\t\tSpecify number_datasets. Default is 100.
+\t\t--is_do_not_use_copap <type=int> 
+\t\t\tSpecify is_do_not_use_copap. Default is 0.
 \t\t--is_optimize_pi <type=int> 
 \t\t\tSpecify is_optimize_pi. Default is 1.
 \t\t--is_optimize_pi_average <type=int> 
@@ -218,16 +202,32 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify file_interactive_tree_html. Default is 0.
 \t\t--file_newick_tree_png <type=int> 
 \t\t\tSpecify file_newick_tree_png. Default is 0.
+\t\t--file_table_of_coevolution_tsv <type=int>
+\t\t\tSpecify file_table_of_coevolution_tsv. Default is 1.
+\t\t--file_simulated_datasets_fastas <type=int>
+\t\t\tSpecify file_simulated_datasets_fastas. Default is 1.
+\t\t--file_barplot_of_correlation_svg <type=int>
+\t\t\tSpecify file_barplot_of_correlation_svg. Default is 1.
+\t\t--file_plot_distribution_of_correlation_svg <type=int>
+\t\t\tSpecify file_plot_distribution_of_correlation_svg. Default is 1.
+\t\t--file_plot_correlation_by_rate_bin_svg <type=int>
+\t\t\tSpecify file_plot_correlation_by_rate_bin_svg. Default is 1.
+\t\t--file_table_of_posterior_rates_tsv <type=int>
+\t\t\tSpecify file_table_of_posterior_rates_tsv. Default is 1.
+\t\t--file_table_of_pearson_correlation_tsv <type=int>
+\t\t\tSpecify file_table_of_pearson_correlation_tsv. Default is 1.
 \t\t--file_table_of_nodes_tsv <type=int>
 \t\t\tSpecify file_table_of_nodes_tsv. Default is 1.
-\t\t--file_probability_per_pos_per_branches_tsv 
-\t\t\tSpecify file_probability_per_pos_per_branches_tsv. Default is 1.
+\t\t--file_branch_position_probabilities_tsv 
+\t\t\tSpecify file_branch_position_probabilities_tsv. Default is 1.
 \t\t--file_table_of_branches_tsv <type=int> 
 \t\t\tSpecify file_table_of_branches_tsv. Default is 1.
 \t\t--file_log_likelihood_tsv <type=int> 
 \t\t\tSpecify file_log_likelihood_tsv. Default is 1.
 \t\t--file_table_of_attributes_tsv <type=int> 
 \t\t\tSpecify file_table_of_attributes_tsv. Default is 1.
+\t\t--file_table_of_parsimony_and_homoplasy_scores_tsv <type=int> 
+\t\t\tSpecify file_table_of_parsimony_and_homoplasy_scores_tsv. Default is 1.
 \t\t--file_phylogenetic_tree_nwk <type=int> 
 \t\t\tSpecify file_phylogenetic_tree_nwk. Default is 1.
 \t\t--rooting_method <type=str> 
@@ -238,28 +238,4 @@ USAGE = '''\tRequired parameters:
 \t\t\toutgroup - Outgroup Rooting
 \t\t\tDefault is 'midpoint'.
 \t\t--leaf <type=str> 
-\t\t\tSpecify leaf for outgroup rooting. Default is ''.
-\t\t--e_mail <type=str> 
-\t\t\tSpecify e_mail (technical parameter, do not change).
-\t\t--is_do_not_use_e_mail <type=int> 
-\t\t\tSpecify is_do_not_use_e_mail (technical parameter, do not change).'''
-
-MENU = ({'name': 'Home', 'url': 'index',
-         'submenu': ()
-         },
-        {'name': 'Overview', 'url': 'overview',
-         'submenu': ()
-         },
-        {'name': 'Faq', 'url': 'faq',
-         'submenu': ()
-         },
-        {'name': 'Gallery', 'url': 'gallery',
-         'submenu': ()
-         },
-        {'name': 'Source code', 'url': 'source_code',
-         'submenu': ()
-         },
-        {'name': 'Citing & credits', 'url': 'citing_and_credits',
-         'submenu': ()
-         }
-        )
+\t\t\tSpecify leaf for outgroup rooting. Default is ''.'''
