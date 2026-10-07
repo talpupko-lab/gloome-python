@@ -1228,7 +1228,7 @@ class Tree:
         del df['sequence'], df['node_type'], df['prob_characters']
         df = df.iloc[1:]
 
-        d3 = D3Blocks(verbose=60, chart='tree', frame=False)
+        d3 = D3Blocks(verbose='critical', chart='tree', frame=False)
         d3.set_node_properties(df)
 
         d3.font = {'size': 12}
