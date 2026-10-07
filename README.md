@@ -1,20 +1,23 @@
 # GLOOME: Gain Loss Mapping Engine
-A bioinformatics tool for analyzing gene gain and loss events during evolution
+A high-performance bioinformatics tool for analyzing gene gain and loss events, and pattern co-evolution during evolution.
 
 GLOOME provides evolutionary analysis of presence and absence profiles (phyletic patterns). These patterns are assumed to result from gain and loss dynamics along a phylogenetic tree. Examples of characters represented by phyletic patterns include:
 
-Restriction sites
-Gene families
-Introns
-Indels
-The primary purpose of the GLOOME server is to accurately infer branch-specific and site-specific gain and loss events. This inference is based on a stochastic mapping approach, using evolutionary models that accurately reflect the underlying biological processes.
+* Restriction sites
+* Gene families
+* Introns
+* Indels
 
-Features
-Support for various evolutionary models
-Gain and loss inference using stochastic mapping or maximum parsimony
-Estimation of gain/loss rates per character
-Advanced optimization options
-Likelihood and parsimony-based output
+The primary purpose of GLOOME is to accurately infer branch-specific and site-specific gain and loss events, as well as to analyze the co-evolution of presence-absence patterns (CoPAP). This inference is based on a stochastic mapping approach, using evolutionary models that accurately reflect the underlying biological processes.
+
+### Features
+* **Support for various evolutionary models**
+* **Gain and loss inference** using stochastic mapping or maximum parsimony
+* **CoPAP (Co-evolution of presence-absence patterns) analysis** to study correlated character evolution
+* **High-performance computing** powered by optimized NumPy vectorization for ultra-fast phylogenetic calculations
+* **Estimation of gain/loss rates** per character
+* **Advanced optimization options** for evolutionary parameters
+* **Comprehensive likelihood, parsimony, and correlation-based output**
 
 ### Project structure
 
@@ -23,7 +26,6 @@ gloome
 ├── gloome
 │   ├── services
 │   │   ├── __init__.py
-│   │   ├── design_functions.py
 │   │   └── service_functions.py
 │   ├── tree
 │   │   ├── __init__.py
@@ -39,16 +41,17 @@ gloome
 └── README.md
 ```
 
-This manual provides comprehensive Gloome on input formats, command-line usage, interpretation of results, and troubleshooting.
+This manual provides comprehensive documentation on input formats, command-line usage, interpretation of results, and troubleshooting.
 
 ### Program Execution
-To get the project working, you need to run the command "gloome" or "python3 -m gloome" or "python -m gloome" in the terminal with the following parameters:
+To get the project working, you need to run the command `gloome` or `python3 -m gloome` or `python -m gloome` in the terminal with the following parameters:
 
 #### Required parameters:
 
 ```Required parameters
     --msa_file <type=str>
-        Specify the msa filepath.
+        Specify the msa filepath. Input must be a 0/1 binary matrix 
+        ('1' for presence, '0' for absence, and '?' for missing data).
 
     --tree_file <type=str>
         Specify the newick filepath.
@@ -93,7 +96,7 @@ To get the project working, you need to run the command "gloome" or "python3 -m 
         Specify number_datasets. Default is 100.
     
     --is_do_not_use_copap <type=int> 
-        Specify is_do_not_use_copap. Default is 0.
+        Specify whether to skip CoPAP analysis. Default is 0.
 
     --is_optimize_pi <type=int> 
         Specify is_optimize_pi. Default is 1.
@@ -168,7 +171,7 @@ To get the project working, you need to run the command "gloome" or "python3 -m 
 ```
 
 ### Citing
-If you use the GLOOME web server for your research, please make sure to cite the following publication:
+If you use GLOOME for your research, please make sure to cite the following publication:
 
 Cohen, O., Ashkenazy, H., Belinky, F., Huchon, D., and Pupko, T. 2010. GLOOME: gain loss mapping engine. 
 Bioinformatics 26(22):2914-2915. [[pdf](https://www.tau.ac.il/~talp/publications/GLOOME.pdf)] [[abs](https://academic.oup.com/bioinformatics/article/26/22/2914/228050)]
@@ -176,6 +179,18 @@ Bioinformatics 26(22):2914-2915. [[pdf](https://www.tau.ac.il/~talp/publications
 ### BibTeX
 Proper citation helps support the development and maintenance of this tool.
 
+```bibtex
+@article{cohen2010gloome,
+  author = {Cohen, Ofir and Ashkenazy, Haim and Belinky, Frida and Huchon, Doroth{\'e}e and Pupko, Tal},
+  title = {GLOOME: gain loss mapping engine},
+  journal = {Bioinformatics},
+  volume = {26},
+  number = {22},
+  pages = {2914--2915},
+  year = {2010},
+  publisher = {Oxford University Press}
+}
+```
+
 ### Contact
 For questions, issues, or contributions, please open an issue on the repository or contact the maintainer directly.
-
