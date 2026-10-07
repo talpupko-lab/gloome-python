@@ -1,23 +1,52 @@
 import inspect
 import json
-import re
 
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Union, Tuple, Optional, Dict, List
 from datetime import timedelta
 from shutil import make_archive, move
 from numpy import ndarray
-from typing import Union, Tuple, Optional, Dict, List
 
 from gloome.tree.tree import Tree
 
+FILE_LIST = [
+    'Log-likelihood (tsv)',
+    'Table of nodes (tsv)',
+    'Table of branches (tsv)',
+    'Branch position probabilities (tsv)',
+    'Table of coevolution (tsv)',
+    'Parsimony and homoplasy scores (tsv)',
+    'Table of posterior rates (tsv)',
+    'Table of pearson correlation (tsv)',
+    'Tree attributes (tsv)',
+    'Phylogenetic tree (nwk)',
+    'Simulated datasets (fastas)',
+    'Log-File (log)',
+    'JSON response file (json)',
+    'Barplot of correlation (svg)',
+    'Plot of correlation by rate-bin (svg)',
+    'Plot of distribution of correlation (svg)',
+    'Interactive tree (html)',
+    'Newick tree (svg)',
+    'Newick tree (png)',
+    'Newick tree (txt)',
+    'Archive (zip)'
+]
 SELECTED_FILES = {'file_interactive_tree_html': True,
                   'file_newick_tree_png': True,
+                  'file_table_of_coevolution_tsv': True,
+                  'file_simulated_datasets_fastas': True,
+                  'file_table_of_posterior_rates_tsv': True,
+                  'file_barplot_of_correlation_svg': True,
+                  'file_plot_distribution_of_correlation_svg': True,
+                  'file_plot_correlation_by_rate_bin_svg': True,
+                  'file_table_of_pearson_correlation_tsv': True,
                   'file_table_of_nodes_tsv': True,
-                  'file_probability_per_pos_per_branches_tsv': True,
+                  'file_branch_position_probabilities_tsv': True,
                   'file_table_of_branches_tsv': True,
                   'file_log_likelihood_tsv': True,
                   'file_table_of_attributes_tsv': True,
+                  'file_table_of_parsimony_and_homoplasy_scores_tsv': True,
                   'file_phylogenetic_tree_nwk': True}
 
 
@@ -46,6 +75,7 @@ def get_dict(request_form: Dict[str, str]) -> Tuple[Union[str, int, float], ...]
 def get_path(path: Union[str, Path]) -> Path:
     if path and isinstance(path, str):
         return Path(path)
+
     return path
 
 
@@ -69,6 +99,7 @@ def read_file(file_path: Union[str, Path], mode: str = 'r') -> str:
     if file_path.is_file():
         with open(file_path, mode) as f:
             return f.read()
+
     return ''
 
 
@@ -81,10 +112,12 @@ def save_file(file_path: Union[str, Path], data: Union[str, Any], mode: str = 'w
 
 
 def loads_json(data: str) -> Any:
+
     return json.loads(data)
 
 
 def dumps_json(data: Any) -> str:
+
     return json.dumps(data)
 
 
@@ -116,13 +149,17 @@ def check_tree_data(newick_tree: Union[str, Tree], msa: Union[Dict[str, str], st
         msa = newick_tree.get_msa_dict(msa)
     if alphabet is None:
         alphabet = Tree.get_alphabet_from_dict(msa)
+
     return newick_tree, msa, alphabet
 
 
-def execute_all_actions(newick_tree: Union[str, Tree], file_path: Union[str, Path], create_new_file: bool = False,
-                        form_data: Optional[Dict[str, Union[str, int, float, ndarray]]] = None,
+def execute_all_actions(newick_tree: Union[str, Tree], file_path: Union[str, Path],
                         log_file: Optional[str] = None, with_internal_nodes: bool = True,
-                        actions: Optional[Dict[str, bool]] = None, selected_files: Optional[Dict[str, bool]] = None
+                        actions: Optional[Dict[str, bool]] = None, selected_files: Optional[Dict[str, bool]] = None,
+                        use_copap: Optional[bool] = None,
+                        probability_lg: Union[float, ndarray] = 0.5,
+                        number_lg: Union[float, ndarray, int] = 1,
+                        number_datasets: int = 100
                         ) -> Union[Dict[str, str], Path]:
     result_data = {}
     if actions is None or actions.get('draw_tree', False):
@@ -131,10 +168,9 @@ def execute_all_actions(newick_tree: Union[str, Tree], file_path: Union[str, Pat
         result_data.update({'compute_likelihood_of_tree': compute_likelihood_of_tree(newick_tree)})
     if actions is None or actions.get('create_all_file_types', False):
         result_data.update({'create_all_file_types': create_all_file_types(newick_tree, file_path, log_file,
-                                                                           with_internal_nodes, selected_files)})
-    if create_new_file:
-        file_path = file_path.joinpath('result.json') if isinstance(file_path, Path) else f'{file_path}/result.json'
-        return create_file(file_path, get_result_data(result_data, 'execute_all_actions', form_data), 'result.json')
+                                                                           with_internal_nodes, selected_files,
+                                                                           use_copap, probability_lg, number_lg,
+                                                                           number_datasets)})
 
     return result_data
 
@@ -148,42 +184,89 @@ def compute_likelihood_of_tree(newick_tree: Union[str, Tree]) -> Union[List[Unio
 
 def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, Path],
                           log_file: Optional[Union[str, Path]] = None,
-                          with_internal_nodes: Optional[bool] = True, selected_files: Optional[Dict[str, bool]] = None
+                          with_internal_nodes: Optional[bool] = True,
+                          selected_files: Optional[Dict[str, bool]] = None,
+                          use_copap: Optional[bool] = None,
+                          probability_lg: Union[float, ndarray] = 0.5,
+                          number_lg: Union[float, ndarray, int] = 1,
+                          number_datasets: int = 100
                           ) -> Union[Dict[str, str], str]:
     selected_files = (SELECTED_FILES if selected_files is None else selected_files)
     result = {}
     newick_tree = Tree.check_tree(newick_tree)
     taking_into_coefficient = newick_tree.coefficient_bl != 1
+    use_correlation = newick_tree.msa_length > 1
+    use_rates = newick_tree.rate_vector_length > 1
+    use_simulated_datasets_file = selected_files.get('file_simulated_datasets_fastas', False)
+    if use_correlation:
+        use_coevolution_file = selected_files.get('file_table_of_coevolution_tsv', False)
+        use_barplot_of_correlation_file = selected_files.get('file_barplot_of_correlation_svg', False)
+        use_plot_distribution_of_correlation_file = selected_files.get('file_plot_distribution_of_correlation_svg',
+                                                                       False)
+        use_plot_correlation_by_rate_bin_file = selected_files.get('file_plot_correlation_by_rate_bin_svg', False)
+    else:
+        use_coevolution_file = False
+        use_barplot_of_correlation_file = False
+        use_plot_distribution_of_correlation_file = False
+        use_plot_correlation_by_rate_bin_file = False
+
     if selected_files.get('file_interactive_tree_html', False):
         result.update({'Interactive tree (html)':
-                       newick_tree.tree_to_interactive_html(f'{file_path}/InteractiveTree.html',
+                       newick_tree.tree_to_interactive_html(file_name=f'{file_path}/InteractiveTree.html',
                                                             taking_into_coefficient=taking_into_coefficient)})
     if selected_files.get('file_newick_tree_png', False):
-        result.update(newick_tree.tree_to_visual_format(f'{file_path}/VisualTree.svg', with_internal_nodes,
-                                                        ('png', ),
-                                                        taking_into_coefficient=taking_into_coefficient))
+        result.update(newick_tree.tree_to_visual_format(file_name=f'{file_path}/VisualTree.svg',
+                                                        with_internal_nodes=with_internal_nodes,
+                                                        taking_into_coefficient=taking_into_coefficient,
+                                                        file_extensions=('png', )))
+    if selected_files.get('file_table_of_posterior_rates_tsv', False) and use_copap and use_rates:
+        result.update({'Table of posterior rates (tsv)':
+                       newick_tree.posterior_rates_to_tsv(file_name=f'{file_path}/PosteriorRates.tsv')})
+    if selected_files.get('file_table_of_pearson_correlation_tsv', False) and use_copap and use_correlation:
+        result.update({'Table of pearson correlation (tsv)':
+                       newick_tree.pearson_correlation_to_tsv(file_name=f'{file_path}/PearsonCorrelation.tsv',
+                                                              probability_lg=probability_lg,
+                                                              number_lg=number_lg)})
     if selected_files.get('file_table_of_nodes_tsv', False):
         result.update({'Table of nodes (tsv)':
-                       newick_tree.tree_to_tsv(f'{file_path}/Nodes.tsv', mode='node_tsv',
-                                               taking_into_coefficient=taking_into_coefficient)})
-    if selected_files.get('file_probability_per_pos_per_branches_tsv', False):
-        result.update({'Probability per positions per branches (tsv)':
-                       newick_tree.probability_to_tsv(f'{file_path}/ProbabilityPerPositionsPerBranches.tsv',
+                       newick_tree.tree_to_tsv(file_name=f'{file_path}/Nodes.tsv',
+                                               taking_into_coefficient=taking_into_coefficient,
+                                               mode='node_tsv')})
+    if selected_files.get('file_branch_position_probabilities_tsv', False):
+        result.update({'Branch position probabilities (tsv)':
+                       newick_tree.probability_to_tsv(file_name=f'{file_path}/BranchPositionProbabilities.tsv',
                                                       taking_into_coefficient=taking_into_coefficient)})
     if selected_files.get('file_table_of_branches_tsv', False):
         result.update({'Table of branches (tsv)':
-                       newick_tree.tree_to_tsv(f'{file_path}/Branches.tsv', mode='branch_tsv',
-                                               taking_into_coefficient=taking_into_coefficient)})
+                       newick_tree.tree_to_tsv(file_name=f'{file_path}/Branches.tsv',
+                                               taking_into_coefficient=taking_into_coefficient,
+                                               mode='branch_tsv')})
     if selected_files.get('file_log_likelihood_tsv', False):
         result.update({'Log-likelihood (tsv)':
-                       newick_tree.likelihood_to_tsv(f'{file_path}/LogLikelihood.tsv')})
+                       newick_tree.likelihood_to_tsv(file_name=f'{file_path}/LogLikelihood.tsv')})
     if selected_files.get('file_table_of_attributes_tsv', False):
         result.update({'Tree attributes (tsv)':
-                       newick_tree.attributes_to_tsv(f'{file_path}/TreeAttributes.tsv')})
+                       newick_tree.attributes_to_tsv(file_name=f'{file_path}/TreeAttributes.tsv')})
+    if selected_files.get('file_table_of_parsimony_and_homoplasy_scores_tsv', False):
+        result.update({'Parsimony and homoplasy scores (tsv)':
+                       newick_tree.parsimony_score_to_tsv(file_name=f'{file_path}/ParsimonyAndHomoplasyScores.tsv')})
     if selected_files.get('file_phylogenetic_tree_nwk', False):
         result.update({'Phylogenetic tree (nwk)':
-                       newick_tree.tree_to_newick_file(f'{file_path}/PhylogeneticTree.nwk', True, 0,
-                                                       taking_into_coefficient=taking_into_coefficient)})
+                       newick_tree.tree_to_newick_file(file_name=f'{file_path}/PhylogeneticTree.nwk',
+                                                       taking_into_coefficient=taking_into_coefficient,
+                                                       with_internal_nodes=with_internal_nodes,
+                                                       decimal_length=0)})
+    if any((use_simulated_datasets_file, use_coevolution_file, use_barplot_of_correlation_file,
+            use_plot_distribution_of_correlation_file, use_plot_correlation_by_rate_bin_file)) and use_copap:
+        result.update(newick_tree.simulate_datasets(file_path=f'{file_path}',
+                                                    number_datasets=number_datasets,
+                                                    use_simulated_datasets_file=use_simulated_datasets_file,
+                                                    use_coevolution_file=use_coevolution_file,
+                                                    use_barplot_of_correlation_file=use_barplot_of_correlation_file,
+                                                    use_plot_distribution_of_correlation_file=
+                                                    use_plot_distribution_of_correlation_file,
+                                                    use_plot_correlation_by_rate_bin_file=
+                                                    use_plot_correlation_by_rate_bin_file))
 
     if result:
         file_path = get_path(file_path)
@@ -211,27 +294,16 @@ def draw_tree(newick_tree: Tree) -> Union[List[Any], str]:
 
 
 def convert_seconds(seconds: float) -> str:
+
     return str(timedelta(seconds=seconds))
 
 
 def del_bootstrap_values(newick_text: str) -> str:
-    pattern = r'\)(100|[1-9]\d|\d)(?=[;:, \)])'
-    matches_list = re.findall(pattern, newick_text)
-    matches_list.sort()
-    matches_set = set(matches_list)
-    list_length = len(matches_list)
-    set_length = len(matches_set)
 
-    if any((list_length != set_length,
-            all((matches_list != list(range(1, list_length + 1)),
-                 matches_list != list(range(0, list_length)))))):
-        newick_text = re.sub(pattern, lambda x: ')', newick_text)
-
-    return newick_text
+    return Tree.del_bootstrap_values(newick_text)
 
 
 def get_leaves(data) -> List[str]:
-    data = del_bootstrap_values(data)
 
     return Tree(data).get_leaves(only_node_list=False)
 
@@ -244,22 +316,32 @@ def check_data(*args) -> List[Tuple[str, str]]:
     alpha = float(args[3])
     pi_1 = float(args[4])
     coefficient_bl = float(args[5])
-    e_mail = args[6]
-    is_optimize_pi = bool(args[7])
-    is_optimize_pi_average = bool(args[8])
-    is_optimize_alpha = bool(args[9])
-    is_optimize_bl = bool(args[10])
-    is_do_not_use_e_mail = bool(args[11])
-    file_interactive_tree_html = bool(args[12])
-    file_newick_tree_png = bool(args[13])
-    file_table_of_nodes_tsv = bool(args[14])
-    file_probability_per_pos_per_branches_tsv = bool(args[15])
-    file_table_of_branches_tsv = bool(args[16])
-    file_log_likelihood_tsv = bool(args[17])
-    file_table_of_attributes_tsv = bool(args[18])
-    file_phylogenetic_tree_nwk = bool(args[19])
-    rooting_method = args[20].strip()
-    leaf = args[21].strip()
+    probability_lg = float(args[6])
+    number_lg = int(args[7])
+    number_datasets = int(args[8])
+    is_optimize_pi = bool(args[9])
+    is_optimize_pi_average = bool(args[10])
+    is_optimize_alpha = bool(args[11])
+    is_optimize_bl = bool(args[12])
+    is_do_not_use_copap = bool(args[13])
+    file_interactive_tree_html = bool(args[14])
+    file_newick_tree_png = bool(args[15])
+    file_table_of_coevolution_tsv = bool(args[16])
+    file_simulated_datasets_fastas = bool(args[17])
+    file_table_of_posterior_rates_tsv = bool(args[18])
+    file_barplot_of_correlation_svg = bool(args[19])
+    file_plot_distribution_of_correlation_svg = bool(args[20])
+    file_plot_correlation_by_rate_bin_svg = bool(args[21])
+    file_table_of_pearson_correlation_tsv = bool(args[22])
+    file_table_of_nodes_tsv = bool(args[23])
+    file_branch_position_probabilities_tsv = bool(args[24])
+    file_table_of_branches_tsv = bool(args[25])
+    file_log_likelihood_tsv = bool(args[26])
+    file_table_of_attributes_tsv = bool(args[27])
+    file_table_of_parsimony_and_homoplasy_scores_tsv = bool(args[28])
+    file_phylogenetic_tree_nwk = bool(args[29])
+    rooting_method = args[30].strip()
+    leaf = args[31].strip()
 
     if not isinstance(categories_quantity, int) or not 1 <= categories_quantity <= 16:
         err_list.append((f'Number of rate categories value error [ {categories_quantity} ]',
@@ -275,8 +357,17 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Branch lengths (BL) coefficient value error [ {coefficient_bl} ]',
                          f'The value must be between 0.1 and 10.'))
 
-    if ((not isinstance(e_mail, str) or not e_mail) or not validate_email(e_mail)) and not is_do_not_use_e_mail:
-        err_list.append((f'Invalid email address [ {e_mail} ]', f'Must be valid email address.'))
+    if not isinstance(probability_lg, float) or not 0.01 <= probability_lg <= 0.99:
+        err_list.append((f'Probability of loss/gain event value error [ {probability_lg} ]',
+                         f'The value must be between 0.01 and 0.99.'))
+
+    if not isinstance(number_lg, int) or not 1 <= number_lg <= 20:
+        err_list.append((f'Number of loss/gain events value error [ {number_lg} ]',
+                         f'The value must be between 1 and 20.'))
+
+    if not isinstance(number_datasets, int) or not 1 <= number_datasets <= 1000:
+        err_list.append((f'Number of simulation events value error [ {number_datasets} ]',
+                         f'The value must be between 1 and 1000.'))
 
     if not isinstance(is_optimize_pi, bool):
         err_list.append((f'Optimize π1 value (algorithmic) error [ {is_optimize_pi} ]',
@@ -293,8 +384,8 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Optimize branch lengths coefficient value error [ {is_optimize_bl} ]',
                          f'The value must be boolean type.'))
 
-    if not isinstance(is_do_not_use_e_mail, bool):
-        err_list.append((f'Do not use e-mail value error [ {is_do_not_use_e_mail} ]',
+    if not isinstance(is_do_not_use_copap, bool):
+        err_list.append((f'Do not use CoPAP value error [ {is_do_not_use_copap} ]',
                          f'The value must be boolean type.'))
 
     if not isinstance(file_interactive_tree_html, bool):
@@ -305,13 +396,46 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Newick tree (png) value error [ {file_newick_tree_png} ]',
                          f'The value must be boolean type.'))
 
+    if not isinstance(file_table_of_coevolution_tsv, bool):
+        err_list.append((f'Coevolution (tsv) value error '
+                         f'[ {file_table_of_coevolution_tsv} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_simulated_datasets_fastas, bool):
+        err_list.append((f'Simulated datasets (fastas) value error '
+                         f'[ {file_simulated_datasets_fastas} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_table_of_posterior_rates_tsv, bool):
+        err_list.append((f'Table of posterior rates (tsv) value error [ {file_table_of_posterior_rates_tsv} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_barplot_of_correlation_svg, bool):
+        err_list.append((f'Barplot of correlation (svg) value error '
+                         f'[ {file_barplot_of_correlation_svg} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_plot_distribution_of_correlation_svg, bool):
+        err_list.append((f'Plot of distribution of correlation (svg) value error '
+                         f'[ {file_plot_distribution_of_correlation_svg} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_plot_correlation_by_rate_bin_svg, bool):
+        err_list.append((f'Plot of correlation by rate-bin (svg) value error '
+                         f'[ {file_plot_correlation_by_rate_bin_svg} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_table_of_pearson_correlation_tsv, bool):
+        err_list.append((f'Table of pearson correlation (tsv) value error [ {file_table_of_pearson_correlation_tsv} ]',
+                         f'The value must be boolean type.'))
+
     if not isinstance(file_table_of_nodes_tsv, bool):
         err_list.append((f'Table of nodes (tsv) value error [ {file_table_of_nodes_tsv} ]',
                          f'The value must be boolean type.'))
 
-    if not isinstance(file_probability_per_pos_per_branches_tsv, bool):
-        err_list.append((f'Probability per positions per branches (tsv) value error [ '
-                         f'{file_probability_per_pos_per_branches_tsv} ]', f'The value must be boolean type.'))
+    if not isinstance(file_branch_position_probabilities_tsv, bool):
+        err_list.append((f'Branch position probabilities (tsv) value error [ '
+                         f'{file_branch_position_probabilities_tsv} ]', f'The value must be boolean type.'))
 
     if not isinstance(file_table_of_branches_tsv, bool):
         err_list.append((f'Table of branches (tsv) value error [ {file_table_of_branches_tsv} ]',
@@ -322,7 +446,12 @@ def check_data(*args) -> List[Tuple[str, str]]:
                          f'The value must be boolean type.'))
 
     if not isinstance(file_table_of_attributes_tsv, bool):
-        err_list.append((f'Table of attributes (tsv) value error [ {file_table_of_attributes_tsv} ]',
+        err_list.append((f'Tree attributes (tsv) value error [ {file_table_of_attributes_tsv} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_table_of_parsimony_and_homoplasy_scores_tsv, bool):
+        err_list.append((f'Parsimony and homoplasy scores (tsv) value error [ '
+                         f'{file_table_of_parsimony_and_homoplasy_scores_tsv} ]',
                          f'The value must be boolean type.'))
 
     if not isinstance(file_phylogenetic_tree_nwk, bool):
@@ -339,112 +468,102 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append(('MSA error', 'No MSA was provided.'))
     elif not msa.startswith('>'):
         err_list.append(('MSA error', 'Wrong MSA format. Please provide MSA in FASTA format.'))
-    elif len(msa.split('\n')) / 2 < 2:
-        err_list.append(('MSA error', 'There should be at least two sequences in the MSA.'))
     else:
-        len_list = []
-        incorrect_characters = ''
-        for i, current_line in enumerate(msa.split()):
-            if i % 2:
-                current_line = current_line.strip()
-                len_list.append(len(current_line))
-                for j in current_line:
-                    if j not in '01':
-                        incorrect_characters += f'{j} '
-
-        if min(len_list) != max(len_list):
-            err_list.append((f'MSA error', f'The MSA contains sequences of different lengths.'))
-        if incorrect_characters:
-            err_list.append(('MSA error',
-                             f'MSA file contains an illegal character(s) [ {incorrect_characters.strip()} ]. '
-                             f'Please note that “0” and “1” are the only allowed characters in the phyletic MSAs.'))
-
-        msa_list = msa.strip().split()
-        msa_taxa_info = [msa_list[j + j][1::] for j in range(len(msa_list) // 2)]
-
-        if len(msa_taxa_info) != len(msa_taxa_info):
-            err_list.append((f'MSA error', f'Duplicate taxa names found.'))
-
-        if not newick_text:
-            err_list.append((f'TREE error', f'No Phylogenetic tree was provided.'))
-        elif (not (newick_text.startswith('(') and newick_text.endswith(';')) or
-              (newick_text.count('(') != newick_text.count(')'))):
-            err_list.append((f'TREE error', f'Wrong Phylogenetic tree format. Please provide a tree in Newick format.'))
+        msa_list = msa.split()
+        msa_list_size = len(msa_list)
+        if msa_list_size / 2 < 2:
+            err_list.append(('MSA error', 'There should be at least two sequences in the MSA.'))
         else:
-            try:
-                current_tree = Tree(newick_text)
-                Tree.rename_nodes(current_tree)
-            except ValueError:
-                current_tree = None
+            allowed = set('01?')
+            all_chars = set()
+            msa_taxa_set = set()
 
-            if current_tree:
-                for current_node in current_tree.get_list_nodes_info(with_additional_details=True, filters={'distance':
-                                                                     [0.0, ]}, only_node_list=True):
-                    current_node.distance_to_father = float(f'{current_node.distance_to_father:.4f}1')
-                edges_distances_list = current_tree.tree_to_table(filters={'node_type': ['leaf', 'node']},
-                                                                  columns={'distance': 'distance'},
-                                                                  distance_type=float,
-                                                                  taking_into_coefficient=False).T.values[0].tolist()
-                if not all(edges_distances_list):
-                    err_list.append((f'TREE error',
-                                     f'One or more branches in the tree have zero length.\n'
-                                     f'{edges_distances_list}'))
-                if not (current_tree.get_leaves_count() == len(msa.split('\n')) / 2 == msa.count('>')):
-                    err_list.append((f'MSA error',
-                                     f'A discrepancy exists between the number of leaves in the phylogenetic tree and '
-                                     f'the number of sequences present in the MSA data.'))
+            first_len = None
+            is_different_lengths = False
+            has_duplicate_taxa = False
 
-                tree_taxa_info = current_tree.tree_to_table(filters={'node_type': ['leaf']}, columns={'node': 'node'},
-                                                            taking_into_coefficient=False).T.values[0].tolist()
+            for i in range(0, msa_list_size, 2):
+                taxa = msa_list[i][1:]
+                if taxa in msa_taxa_set:
+                    has_duplicate_taxa = True
+                msa_taxa_set.add(taxa)
 
-                if len(tree_taxa_info) != len(set(tree_taxa_info)):
-                    err_list.append((f'TREE error', f'Duplicate taxa names found.'))
+                if i + 1 < msa_list_size:
+                    line = msa_list[i + 1]
+                    current_len = len(line)
 
-                if set(tree_taxa_info).difference(set(msa_taxa_info)):
-                    err_list.append((f'DATA MISMATCH error',
-                                     f'Taxa names in the MSA and phylogenetic tree do not match.'))
-                if not current_tree.all_nodes.get(leaf) and rooting_method == 'outgroup':
-                    err_list.append((f'TREE error', f'Leaf {leaf} not found.'))
-            else:
+                    if first_len is None:
+                        first_len = current_len
+                    elif current_len != first_len:
+                        is_different_lengths = True
+
+                    all_chars.update(line)
+
+            unique_incorrect = all_chars - allowed
+            incorrect_characters = ' '.join(unique_incorrect)
+
+            if is_different_lengths:
+                err_list.append(('MSA error', 'The MSA contains sequences of different lengths.'))
+
+            if incorrect_characters:
+                err_list.append(('MSA error',
+                                 f'MSA file contains an illegal character(s) [ {incorrect_characters} ]. '
+                                 f'Please note that “0”, “1” and “?” (missing data) are the only allowed characters '
+                                 f'in the phyletic MSAs.'))
+
+            if has_duplicate_taxa:
+                err_list.append(('MSA error', 'Duplicate taxa names found.'))
+
+            if not newick_text:
+                err_list.append((f'TREE error', f'No Phylogenetic tree was provided.'))
+            elif (not (newick_text.startswith('(') and newick_text.endswith(';')) or
+                  (newick_text.count('(') != newick_text.count(')'))):
                 err_list.append((f'TREE error',
-                                 f'Wrong Phylogenetic tree format. Please provide a tree in Newick format.'))
+                                 'Wrong Phylogenetic tree format. Please provide a tree in Newick format.'))
+            else:
+                try:
+                    current_tree = Tree(newick_text)
+                    Tree.rename_nodes(current_tree)
+                except ValueError:
+                    current_tree = None
+
+                if current_tree:
+                    for current_node in current_tree.get_list_nodes_info(with_additional_details=True,
+                                                                         filters={'distance': [0.0, ]},
+                                                                         only_node_list=True):
+                        current_node.distance_to_father = float(f'{current_node.distance_to_father:.4f}1')
+                    edges_distances_list = current_tree.tree_to_table(filters={'node_type': ['leaf', 'node']},
+                                                                      columns={'distance': 'distance'},
+                                                                      distance_type=float,
+                                                                      taking_into_coefficient=False
+                                                                      ).T.values[0].tolist()
+                    if not all(edges_distances_list):
+                        err_list.append((f'TREE error',
+                                         f'One or more branches in the tree have zero length.\n'
+                                         f'{edges_distances_list}'))
+                    if not (current_tree.get_leaves_count() == len(msa.split('\n')) / 2 == msa.count('>')):
+                        err_list.append((f'MSA error',
+                                         f'A discrepancy exists between the number of leaves in the phylogenetic tree '
+                                         f'and the number of sequences present in the MSA data.'))
+
+                    tree_taxa_info = current_tree.get_leaves(only_node_list=False)
+
+                    tree_taxa_set = set(tree_taxa_info)
+                    if len(tree_taxa_info) != len(tree_taxa_set):
+                        err_list.append((f'TREE error', f'Duplicate taxa names found.'))
+
+                    if tree_taxa_set.difference(msa_taxa_set):
+                        err_list.append((f'DATA MISMATCH error',
+                                         f'Taxa names in the MSA and phylogenetic tree do not match.'))
+                    if not current_tree.all_nodes.get(leaf) and rooting_method == 'outgroup':
+                        err_list.append((f'TREE error', f'Leaf {leaf} not found.'))
+                else:
+                    err_list.append((f'TREE error',
+                                     f'Wrong Phylogenetic tree format. Please provide a tree in Newick format.'))
 
     return err_list
 
 
-def validate_email(e_mail: str) -> bool:
-    regex = r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,7}'
-
-    return bool(re.fullmatch(regex, e_mail))
-
-
 def get_function_parameters(func: Callable) -> Tuple[str, ...]:
+
     return tuple(inspect.signature(func).parameters.keys())
-
-
-def recompile_json(output_file: Union[str, Path], process_id: int, create_link: bool) -> str:
-    file_contents = read_file(file_path=output_file)
-    json_object = loads_json(file_contents)
-    action_name = json_object.pop('action_name')
-    data = json_object.pop('data') if 'data' in json_object.keys() else json_object.copy()
-
-    if 'execute_all_actions' in action_name:
-        for key, value in data.items():
-            data.update({key: get_response_design(value, key, create_link, output_file)})
-    else:
-        data = get_response_design(data, action_name, create_link, output_file)
-
-    data.update({'title': process_id})
-    data.update({'form_data': json_object.pop('form_data')})
-    data.update({'action_name': action_name})
-    create_file(file_path=output_file, data=data)
-
-    return '; '.join(data.keys())
-
-
-def get_response_design(json_object: Optional[Any], action_name: str, create_link: bool,
-                        output_file:  Union[str, Path] = '') -> Optional[Any]:
-    if 'create_all_file_types' in action_name and create_link:
-        if output_file:
-            json_object.update({'json response file (json)': output_file})
-    return json_object

@@ -1,9 +1,7 @@
-import pandas as pd
 import numpy as np
 
-from typing import Optional, Dict, Union, List, Tuple, Any
+from typing import Optional, Dict, Union, List, Tuple, Any, Set
 from scipy.linalg import expm
-from math import log, prod
 from json import loads, dumps
 
 from .npencoder import NpEncoder
@@ -16,38 +14,38 @@ class Node:
     children: List['Node']
     name: str
     node_type: str
-    distance_to_father: Union[float, np.ndarray]
-    distance_to_root: Union[float, np.ndarray]
-    distance_to_root_vector: List[Union[float, np.ndarray]]
-    distance_to_nearest: Union[float, np.ndarray]
-    distance_to_father_taking_into_coefficient: Union[float, np.ndarray]
-    distance_to_root_taking_into_coefficient: Union[float, np.ndarray]
-    distance_to_root_vector_taking_into_coefficient: List[Union[float, np.ndarray]]
-    distance_to_nearest_taking_into_coefficient: Union[float, np.ndarray]
+    distance_to_father: Union[float, np.float64]
+    distance_to_root: Union[float, np.float64]
+    distance_to_root_vector: List[Union[float, np.float64]]
+    distance_to_nearest: Union[float, np.float64]
+    distance_to_father_taking_into_coefficient: Union[float, np.float64]
+    distance_to_root_taking_into_coefficient: Union[float, np.float64]
+    distance_to_root_vector_taking_into_coefficient: List[Union[float, np.float64]]
+    distance_to_nearest_taking_into_coefficient: Union[float, np.float64]
     level: int
     levels_to_nearest: int
     alphabet: Tuple[str, ...]
-    alphabet_size: int
-    rate_vector_size: int
-    pi_1: Union[float, np.ndarray]
-    frequency: Tuple[Union[float, np.ndarray], ...]
-    coefficient_bl: Union[float, np.ndarray, int]
-    pmatrix: Optional[Tuple[np.ndarray, ...]]
-    log_likelihood_vector: List[Union[float, np.ndarray]]
-    log_likelihood: Union[float, np.ndarray]
-    sequence_likelihood: Union[float, np.ndarray]
-    likelihood: Union[float, np.ndarray]
-    up_vector: List[List[Union[float, np.ndarray]]]
-    down_vector: List[List[Union[float, np.ndarray]]]
-    marginal_vector: List[List[Union[float, np.ndarray]]]
-    marginal_bl_vector: List[List[Union[float, np.ndarray]]]
-    probability_vector: List[List[Union[float, np.ndarray]]]
-    branch_probability_vector: List[List[Union[float, np.ndarray]]]
-    probability_vector_gain: List[Union[float, np.ndarray]]
-    probability_vector_loss: List[Union[float, np.ndarray]]
+    pi_1: Union[float, np.float64]
+    frequency: Optional[np.ndarray]
+    coefficient_bl: Union[float, np.float64, int]
+    pmatrix: Optional[np.ndarray]
+    log_likelihood_vector: Optional[np.ndarray]
+    log_likelihood: Union[float, np.float64, None]
+    likelihood_vector: Optional[np.ndarray]
+    likelihood: Union[float, np.float64, None]
+    sequence_likelihood: Union[float, np.float64]
+    up_vector: Optional[np.ndarray]
+    down_vector: Optional[np.ndarray]
+    marginal_vector: Optional[np.ndarray]
+    marginal_bl_vector: Optional[np.ndarray]
+    probability_vector: Optional[np.ndarray]
+    branch_probability_vector: Optional[np.ndarray]
+    probability_vector_gain: Optional[np.ndarray]
+    probability_vector_loss: Optional[np.ndarray]
     sequence: str
-    probabilities_sequence_characters: List[Union[float, np.ndarray]]
+    probabilities_sequence_characters: Optional[np.ndarray]
     ancestral_sequence: str
+    aliases = Dict[str, str]
 
     def __init__(self, name: Optional[str]) -> None:
         self.father = None
@@ -65,27 +63,27 @@ class Node:
         self.level = 0
         self.levels_to_nearest = 0
         self.alphabet = ('0', '1')
-        self.alphabet_size = 2
-        self.rate_vector_size = 1
         self.pi_1 = 0.5
-        self.frequency = (0.5, 0.5)
+        self.frequency = np.asarray((0.5, 0.5))
         self.coefficient_bl = 1.0
         self.pmatrix = None
-        self.log_likelihood_vector = []
-        self.log_likelihood = 0.0
+        self.log_likelihood_vector = None
+        self.log_likelihood = None
+        self.likelihood_vector = None
+        self.likelihood = None
         self.sequence_likelihood = 1.0
-        self.likelihood = 0.0
-        self.up_vector = []
-        self.down_vector = []
-        self.marginal_vector = []
-        self.marginal_bl_vector = []
-        self.probability_vector = []
-        self.branch_probability_vector = []
-        self.probability_vector_gain = []
-        self.probability_vector_loss = []
+        self.up_vector = None
+        self.down_vector = None
+        self.marginal_vector = None
+        self.marginal_bl_vector = None
+        self.probability_vector = None
+        self.branch_probability_vector = None
+        self.probability_vector_gain = None
+        self.probability_vector_loss = None
         self.sequence = ''
-        self.probabilities_sequence_characters = []
+        self.probabilities_sequence_characters = None
         self.ancestral_sequence = ''
+        self.aliases = dict()
 
     def __str__(self) -> str:
         return self.get_name(True)
@@ -94,19 +92,20 @@ class Node:
         return ['father', 'children', 'name', 'distance_to_father', 'distance_to_root', 'distance_to_root_vector',
                 'distance_to_nearest', 'distance_to_father_taking_into_coefficient',
                 'distance_to_root_taking_into_coefficient', 'distance_to_root_vector_taking_into_coefficient',
-                'distance_to_nearest_taking_into_coefficient', 'level', 'levels_to_nearest', 'alphabet',
-                'alphabet_size', 'rate_vector_size', 'pi_1', 'frequency', 'coefficient_bl', 'pmatrix',
-                'log_likelihood_vector', 'log_likelihood', 'sequence_likelihood', 'likelihood', 'up_vector',
-                'down_vector', 'marginal_vector', 'marginal_bl_vector' 'probability_vector',
-                'branch_probability_vector', 'probability_vector_gain', 'probability_vector_loss', 'sequence',
-                'probabilities_sequence_characters', 'ancestral_sequence']
+                'distance_to_nearest_taking_into_coefficient', 'level', 'levels_to_nearest', 'alphabet', 'pi_1',
+                'frequency', 'coefficient_bl', 'pmatrix', 'log_likelihood_vector', 'log_likelihood',
+                'sequence_likelihood', 'likelihood', 'up_vector', 'down_vector', 'marginal_vector',
+                'marginal_bl_vector', 'probability_vector', 'branch_probability_vector', 'probability_vector_gain',
+                'probability_vector_loss', 'sequence', 'probabilities_sequence_characters', 'ancestral_sequence',
+                'aliases']
 
     def get_list_nodes_info(self, with_additional_details: bool = False,
                             mode: Optional[str] = None,
                             filters: Optional[Dict[str, List[Union[float, int, str, List[float]]]]] = None,
-                            only_node_list: bool = False
-                            ) -> List[Union[Dict[str, Union[float, np.ndarray, bool, str, List[float],
-                                      List[np.ndarray]]], 'Node']]:
+                            only_node_list: bool = False,
+                            fields: Optional[Set[str]] = None
+                            ) -> List[Union[Dict[str, Union[float, np.float64, bool, str, np.ndarray, List[float],
+                                      List[np.float64]]], 'Node']]:
         """
         Retrieve a list of descendant nodes from a given node, including the node itself.
 
@@ -118,6 +117,10 @@ class Node:
             mode (str, optional): None (default), 'pre-order', 'in-order', 'post-order', 'level-order'.
             filters (Dict, optional):
             only_node_list (Dict, optional): `False` (default).
+            fields (Set[str], optional): `None` (default) builds every field, as before. When given, only these
+                keys are built (see ``get_node_info``) -- restricting this away from the big per-node arrays
+                (up_vector/down_vector/marginal_vector/marginal_bl_vector/pmatrix) when a caller doesn't need them
+                is the difference between a cheap call and one that JSON round-trips gigabytes of numpy arrays.
         Returns:
             list: A list of descendant nodes from a given node, including the node itself or a list of dictionaries
             with information about these nodes.
@@ -125,28 +128,33 @@ class Node:
         list_result = []
         mode = 'pre-order' if mode is None or mode.lower() not in ('pre-order', 'in-order', 'post-order', 'level-order'
                                                                    ) else mode.lower()
-        condition = with_additional_details or only_node_list
+
+        def resolve_item(trees_node: 'Node') -> Union[str, 'Node', Dict[str, Any]]:
+            if only_node_list:
+                return trees_node
+            if with_additional_details:
+                return trees_node.get_node_info(fields)
+            return trees_node.name
 
         def get_list(trees_node: Node) -> None:
-            nonlocal list_result, filters, mode, condition
+            nonlocal list_result, filters, mode
 
-            nodes_info = trees_node.get_node_info()
-            list_item = trees_node if only_node_list else nodes_info
-            if trees_node.check_filter_compliance(filters, nodes_info):
+            if trees_node.check_filter_compliance(filters):
+                list_item = resolve_item(trees_node)
                 if mode == 'pre-order':
-                    list_result.append(list_item if condition else trees_node.name)
+                    list_result.append(list_item)
 
                 for i, child in enumerate(trees_node.children):
                     get_list(child)
                     if mode == 'in-order' and not i:
-                        list_result.append(list_item if condition else trees_node.name)
+                        list_result.append(list_item)
 
                 if not trees_node.children:
                     if mode == 'in-order':
-                        list_result.append(list_item if condition else trees_node.name)
+                        list_result.append(list_item)
 
                 if mode == 'post-order':
-                    list_result.append(list_item if condition else trees_node.name)
+                    list_result.append(list_item)
             else:
                 for child in trees_node.children:
                     get_list(child)
@@ -155,9 +163,8 @@ class Node:
             nodes_list = [self]
             while nodes_list:
                 newick_node = nodes_list.pop(0)
-                if newick_node.check_filter_compliance(filters, newick_node.get_node_info()):
-                    level_order_item = newick_node if only_node_list else newick_node.get_node_info()
-                    list_result.append(level_order_item if condition else newick_node.name)
+                if newick_node.check_filter_compliance(filters):
+                    list_result.append(resolve_item(newick_node))
 
                 for nodes_child in newick_node.children:
                     nodes_list.append(nodes_child)
@@ -166,7 +173,22 @@ class Node:
 
         return list_result
 
-    def get_node_info(self) -> Dict[str, Union[float, np.ndarray, bool, str, List[float], List[np.ndarray]]]:
+    _HEAVY_FIELDS = frozenset({'up_vector', 'down_vector', 'marginal_vector', 'marginal_bl_vector', 'pmatrix'})
+
+    def get_node_info(self, fields: Optional[Set[str]] = None
+                      ) -> Dict[str, Union[float, np.float64, bool, str, np.ndarray, List[float],
+                                List[np.float64]]]:
+        """
+        Args:
+            fields (Set[str], optional): `None` (default) returns every field, as before. When given, only
+                these keys are included -- in particular, skipping the heavy per-node tensors
+                (``_HEAVY_FIELDS``) here means they're never handed to the ``loads(dumps(...))`` round-trip
+                below, which is what actually costs memory: that round-trip turns each packed numpy array
+                into nested Python lists of boxed floats, at several times the array's own footprint, and
+                CPython doesn't return that memory to the OS as calls repeat. A caller that doesn't need
+                these fields (most don't -- see Tree.get_columns) should always pass `fields`.
+        """
+        want = (lambda k: fields is None or k in fields)
 
         result = {'node': self.name,
                   'distance': self.distance_to_father,
@@ -182,14 +204,10 @@ class Node:
                   'full_distance': self.distance_to_root_vector,
                   'full_distance_taking_into_coefficient': self.distance_to_root_vector_taking_into_coefficient,
                   'children': [i.name for i in self.children],
-                  'up_vector': self.up_vector,
-                  'down_vector': self.down_vector,
                   'likelihood': self.likelihood,
                   'sequence_likelihood': self.sequence_likelihood,
                   'log_likelihood': self.log_likelihood,
                   'log_likelihood_vector': self.log_likelihood_vector,
-                  'marginal_vector': self.marginal_vector,
-                  'marginal_bl_vector': self.marginal_bl_vector,
                   'probability_vector': self.probability_vector,
                   'sequence': self.sequence,
                   'probabilities_sequence_characters': self.probabilities_sequence_characters,
@@ -198,12 +216,13 @@ class Node:
                   'probability_vector_gain': self.probability_vector_gain,
                   'probability_vector_loss': self.probability_vector_loss,
                   'alphabet': self.alphabet,
-                  'alphabet_size': self.alphabet_size,
-                  'rate_vector_size': self.rate_vector_size,
                   'pi_1': self.pi_1,
                   'frequency': self.frequency,
-                  'coefficient_bl': self.coefficient_bl,
-                  'pmatrix': self.pmatrix}
+                  'coefficient_bl': self.coefficient_bl}
+        result = {k: v for k, v in result.items() if want(k)}
+        for key in self._HEAVY_FIELDS:
+            if want(key):
+                result[key] = getattr(self, key)
 
         return loads(dumps(result, cls=NpEncoder))
 
@@ -217,181 +236,94 @@ class Node:
                     return newick_node
         return None
 
-    def get_pmatrix(self, rate: Union[float, np.ndarray] = 1.0):
+    def get_pmatrix(self, rate: Union[float, np.float64, np.ndarray] = 1.0):
+
         return self.get_one_parameter_pmatrix(rate)
 
-    def calculate_sequence_likelihood(self) -> None:
-        self.sequence_likelihood *= self.likelihood
-        self.log_likelihood += log(max(self.likelihood, eps))
-        self.log_likelihood_vector.append(log(max(self.likelihood, eps)))
-
-    def calculate_gl_probability(self) -> None:
-        self.marginal_bl_vector = []
-
-        for r in range(self.rate_vector_size):
-            current_marginal_bl_vector = []
-            for j in range(self.alphabet_size):
-                for i in range(self.alphabet_size):
-                    current_marginal_bl_vector.append(self.frequency[i] * self.up_vector[r][j] *
-                                                      self.pmatrix[r][i, j] * self.down_vector[r][i])
-            self.marginal_bl_vector.append(current_marginal_bl_vector)
-
-        likelihood = (np.sum([np.sum(self.marginal_bl_vector[r]) for r in range(self.rate_vector_size)]) /
-                      self.rate_vector_size)
-        likelihood = max(likelihood, eps)
-
-        branch_probability_vector = []
-        for i in range(self.alphabet_size * self.alphabet_size):
-            branch_probability_vector.append(np.sum([self.marginal_bl_vector[r][i] for r in
-                                             range(self.rate_vector_size)]) / self.rate_vector_size / likelihood)
-        self.branch_probability_vector.append(branch_probability_vector)
-        self.probability_vector_loss.append(branch_probability_vector[1])
-        self.probability_vector_gain.append(branch_probability_vector[2])
-
-    def calculate_marginal(self) -> Tuple[Union[Union[List[List[np.ndarray]], List[List[float]]], float],
-                                          Union[np.ndarray, float]]:
-        self.marginal_vector = []
-
-        for r in range(self.rate_vector_size):
-            current_marginal_vector = []
-            for j in range(self.alphabet_size):
-                marg = 0
-                for i in range(self.alphabet_size):
-                    marg += self.frequency[i] * self.pmatrix[r][i, j] * self.down_vector[r][i]
-                current_marginal_vector.append(self.up_vector[r][j] * marg)
-            self.marginal_vector.append(current_marginal_vector)
-
-        likelihood = (np.sum([np.sum(self.marginal_vector[r]) for r in range(self.rate_vector_size)]) /
-                      self.rate_vector_size)
-        likelihood = max(likelihood, eps)
-
-        probability_vector = []
-        for i in range(self.alphabet_size):
-            probability_vector.append(np.sum([self.marginal_vector[r][i] for r in range(self.rate_vector_size)]) /
-                                      self.rate_vector_size / likelihood)
-        self.probability_vector.append(probability_vector)
-        probability = max(self.probability_vector[-1])
-        self.sequence = f'{self.sequence}{self.alphabet[self.probability_vector[-1].index(probability)]}'
-        self.probabilities_sequence_characters.append(probability)
-
-        return self.marginal_vector, likelihood
-
-    def calculate_up(self, nodes_dict: Dict[str, Tuple[int, ...]]
-                     ) -> Union[Union[List[List[np.ndarray]], List[List[float]]], float]:
-        self.up_vector = []
-        self.likelihood = 0
-
-        if not self.children:
-            up_vector = list(nodes_dict.get(self.name))
-            max_up_vector = max(up_vector)
-            self.likelihood = (np.sum([self.frequency[s] * up_vector[s] for s in range(self.alphabet_size)]) /
-                               self.rate_vector_size)
-            probable_character = self.alphabet[up_vector.index(max_up_vector)]
-            self.sequence = f'{self.sequence}{probable_character}'
-            self.probabilities_sequence_characters.append(max_up_vector)
-            self.up_vector = [up_vector for _ in range(self.rate_vector_size)]
-
-            self.calculate_sequence_likelihood()
-
-            return self.up_vector
+    def calculate_up(self, rate_vector_length: int, alphabet_length: int, msa_length: int) -> None:
+        total_up = np.ones((rate_vector_length, alphabet_length, msa_length))
 
         for child in self.children:
-            child.calculate_up(nodes_dict)
+            child_contribution = np.einsum('rji,ril->rjl', child.pmatrix, child.up_vector)
 
-        for r in range(self.rate_vector_size):
-            current_up_vector = []
-            for j in range(self.alphabet_size):
-                probabilities = {}
-                for i in range(self.alphabet_size):
-                    for child in self.children:
-                        p1 = child.pmatrix[r][j, i] * child.up_vector[r][i]
-                        probabilities.update({child.name: probabilities.get(child.name, 0.0) + p1})
+            total_up *= child_contribution
 
-                current_up_vector.append(prod(probabilities.values()))
-            self.up_vector.append(current_up_vector)
-            self.likelihood += np.sum([self.frequency[i] * 1 / self.rate_vector_size * v for i, v in
-                                       enumerate(current_up_vector)])
+        self.up_vector = total_up
 
-        self.calculate_sequence_likelihood()
+        weighted_vector = self.up_vector * self.frequency[:, np.newaxis]
 
-        if self.father:
-            return self.up_vector
+        likelihood_per_site = np.sum(np.mean(weighted_vector, axis=0), axis=0)
+
+        invalid_mask = (likelihood_per_site <= 0.0) | np.isnan(likelihood_per_site)
+        likelihood_per_site = np.where(invalid_mask, eps, likelihood_per_site)
+
+        self.likelihood_vector = likelihood_per_site
+        self.likelihood = np.prod(likelihood_per_site)
+        self.log_likelihood_vector = np.log(likelihood_per_site)
+        self.log_likelihood = np.sum(self.log_likelihood_vector)
+
+    def calculate_down(self, rate_vector_length: int, alphabet_length: int, msa_length: int) -> None:
+        total_down = np.ones((rate_vector_length, alphabet_length, msa_length))
+        if not self.father:
+            self.down_vector = total_down
+
         else:
-            return self.likelihood
+            brothers = [b for b in self.father.children if b != self]
+            for brother in brothers:
+                brother_contrib = np.einsum('rji,ril->rjl', brother.pmatrix, brother.up_vector)
+                total_down *= brother_contrib
 
-    def calculate_down(self, tree_info: pd.Series) -> None:
-        self.down_vector = []
+            if self.father.father:
+                father_contrib = np.einsum('rji,ril->rjl', self.father.pmatrix, self.father.down_vector)
+                total_down *= father_contrib
 
-        father = self.father
-        if father:
-            brothers = tuple([father.get_node_by_name(i) for i in tree_info.get(father.name).get('children') if i !=
-                              self.name])
+        self.down_vector = total_down
 
-            for r in range(self.rate_vector_size):
-                current_down_vector = []
-                for j in range(self.alphabet_size):
-                    probabilities = {}
-                    for i in range(self.alphabet_size):
-                        for brother in brothers:
-                            probabilities.update(
-                                {brother.name:
-                                 probabilities.get(brother.name, 0) + (brother.pmatrix[r][j, i] *
-                                                                       brother.up_vector[r][i])})
-                        if father.father:
-                            probabilities.update(
-                                {father.name: probabilities.get(father.name, 0) + (father.pmatrix[r][j, i] *
-                                                                                   father.down_vector[r][i])})
+    def calculate_marginal(self, rate_vector_length: int, msa_length: int) -> None:
+        marg = np.einsum('i,rij,ril->rjl', self.frequency, self.pmatrix, self.down_vector)
 
-                    current_down_vector.append(prod(probabilities.values()))
-                self.down_vector.append(current_down_vector)
+        self.marginal_vector = self.up_vector * marg
+        self.marginal_bl_vector = np.einsum('i,ril,rij,rjl->rjil', self.frequency, self.down_vector,
+                                            self.pmatrix, self.up_vector)
 
-            for child in self.children:
-                child.calculate_down(tree_info)
-        else:
-            self.down_vector = [[1] * self.alphabet_size for _ in range(self.rate_vector_size)]
-            for child in self.children:
-                child.calculate_down(tree_info)
+        likelihoods = np.sum(self.marginal_vector, axis=(0, 1)) / rate_vector_length
+        invalid_mask = (likelihoods == 0.0) | np.isnan(likelihoods) | np.isinf(likelihoods)
+        likelihoods = np.where(invalid_mask, eps, likelihoods)
+        summed_marginal = np.sum(self.marginal_vector, axis=0)
+        summed_marginal_bl = np.sum(self.marginal_bl_vector, axis=0)
+        current_branch_prob = summed_marginal_bl / (rate_vector_length * likelihoods[None, None, :])
+
+        self.probability_vector = (summed_marginal / (rate_vector_length * likelihoods)).T
+        self.branch_probability_vector = current_branch_prob.transpose(2, 0, 1).reshape(msa_length, -1)
+        self.probability_vector_loss = self.branch_probability_vector[:, 1]
+        self.probability_vector_gain = self.branch_probability_vector[:, 2]
+
+        max_indices = np.argmax(self.probability_vector, axis=1)
+        reconstructed_chars = np.array(self.alphabet)[max_indices]
+
+        self.probabilities_sequence_characters = self.probability_vector[np.arange(msa_length), max_indices]
+        self.sequence = ''.join(reconstructed_chars)
 
     def clean_all(self):
-        for current_node in self.get_list_nodes_info(only_node_list=True):
-            current_node.log_likelihood_vector = []
-            current_node.log_likelihood = 0.0
-            current_node.sequence_likelihood = 1.0
-            current_node.likelihood = 0.0
-            current_node.up_vector = []
-            current_node.down_vector = []
-            current_node.marginal_vector = []
-            current_node.marginal_bl_vector = []
-            current_node.probability_vector = []
-            current_node.branch_probability_vector = []
-            current_node.probability_vector_gain = []
-            current_node.probability_vector_loss = []
-            current_node.sequence = ''
-            current_node.probabilities_sequence_characters = []
-            current_node.ancestral_sequence = ''
+        self.log_likelihood_vector = None
+        self.log_likelihood = None
+        self.likelihood_vector = None
+        self.likelihood = None
+        self.sequence_likelihood = 1.0
+        self.up_vector = None
+        self.down_vector = None
+        self.marginal_vector = None
+        self.marginal_bl_vector = None
+        self.probability_vector = None
+        self.branch_probability_vector = None
+        self.probability_vector_gain = None
+        self.probability_vector_loss = None
+        self.sequence = ''
+        self.probabilities_sequence_characters = None
+        self.ancestral_sequence = ''
 
-    def calculate_likelihood(self, msa_dict: Dict[str, str]) -> Tuple[List[float], float, float]:
-
-        leaves_info = self.get_list_nodes_info(True, 'pre-order', {'node_type': ['leaf']})
-
-        len_seq = len(min(list(msa_dict.values())))
-        likelihood, log_likelihood, log_likelihood_list = 1, 0, []
-        for i_char in range(len_seq):
-            nodes_dict = dict()
-            for i in range(len(leaves_info)):
-                node_name = leaves_info[i].get('node')
-                character = msa_dict.get(node_name)[i_char]
-                nodes_dict.update({node_name: tuple([int(j == character) for j in self.alphabet])})
-
-            char_likelihood = self.calculate_up(nodes_dict)
-            likelihood *= char_likelihood
-            log_likelihood += log(max(char_likelihood, eps))
-            log_likelihood_list.append(log(max(char_likelihood, eps)))
-
-        return log_likelihood_list, log_likelihood, likelihood
-
-    def get_one_parameter_pmatrix(self, rate: Union[float, np.ndarray] = 1) -> np.ndarray:
-        qmatrix = np.zeros((2, 2), dtype='float32')
+    def get_one_parameter_pmatrix(self, rate: Union[float, np.float64, np.ndarray] = 1.0) -> np.ndarray:
+        qmatrix = np.zeros((2, 2), dtype=np.float64)
         qmatrix[0, 0] = - 1 / (2 * (1 - self.pi_1))
         qmatrix[0, 1] = 1 / (2 * (1 - self.pi_1))
         qmatrix[1, 0] = 1 / (2 * self.pi_1)
@@ -399,17 +331,30 @@ class Node:
 
         return expm(qmatrix * (self.distance_to_father * self.coefficient_bl * rate))
 
-    def get_jukes_cantor_pmatrix(self, rate: Union[float, np.ndarray] = 1) -> np.ndarray:
-        qmatrix = np.ones((self.alphabet_size, self.alphabet_size))
-        np.fill_diagonal(qmatrix, 1 - self.alphabet_size)
-        qmatrix = qmatrix * 1 / (self.alphabet_size - 1)
+    def get_jukes_cantor_pmatrix(self, alphabet_length: int, rate: Union[float, np.float64, np.ndarray] = 1
+                                 ) -> np.ndarray:
+        qmatrix = np.ones((alphabet_length, alphabet_length))
+        np.fill_diagonal(qmatrix, 1 - alphabet_length)
+        qmatrix = qmatrix * 1 / (alphabet_length - 1)
 
         return expm(qmatrix * (self.distance_to_father * self.coefficient_bl * rate))
 
-    def node_to_json(self) -> Dict[str, Union[str, List[Any], float, np.ndarray]]:
-        dict_json = dict()
-        dict_json.update({'name': self.name})
-        dict_json.update({'distance': f'{float(self.distance_to_father)}'})
+    def get_jukes_cantor_transition_probs(self, alphabet_length: int,
+                                          rate: Union[float, np.float64, np.ndarray, Any] = 1.0
+                                          ) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.float64, np.float64],
+                                                     Tuple[float, float]]:
+        other_states = alphabet_length - 1
+
+        branch_length = self.distance_to_father * self.coefficient_bl * rate
+        exponent = np.exp((-alphabet_length / other_states) * branch_length)
+
+        p_identity = (1 / alphabet_length) + (other_states / alphabet_length) * exponent
+        p_mutation = (1 / alphabet_length) - (1 / alphabet_length) * exponent
+
+        return p_identity, p_mutation
+
+    def node_to_json(self) -> Dict[str, Union[str, List[Any], float, np.float64, np.ndarray]]:
+        dict_json = {'name': self.name, 'distance': f'{float(self.distance_to_father)}'}
 
         if self.children:
             dict_json.update({'children': []})
@@ -418,7 +363,8 @@ class Node:
 
         return dict_json
 
-    def get_distance_to_father(self, taking_into_coefficient: bool) -> Union[float, np.ndarray]:
+    def get_distance_to_father(self, taking_into_coefficient: bool) -> Union[float, np.float64, np.ndarray]:
+
         return self.distance_to_father * self.coefficient_bl if taking_into_coefficient else self.distance_to_father
 
     def subtree_to_newick(self, with_internal_nodes: bool = False,
@@ -470,36 +416,16 @@ class Node:
         self.levels_to_nearest = min(levels_list)
         self.distance_to_nearest = min(distance_list)
 
-    @staticmethod
-    def get_integer(data: Union[str, int, float]) -> int:
-        result = float(data) * 10
+    def get_filter_value(self, key: str) -> Any:
+        if key == 'father_name':
+            return self.father.name if self.father else ''
+        if key == 'children':
+            return [i.name for i in self.children]
 
-        return int(result - 1 if result == 10 else result)
+        return getattr(self, self.aliases.get(key, key), None)
 
-    @staticmethod
-    def draw_html_table(data: str) -> str:
+    def check_filter_compliance(self, filters: Optional[Dict[str, List[Union[float, int, str, List[float]]]]]) -> bool:
+        if not filters:
+            return True
 
-        return f'<table class="w-97 p-4 tooltip">{data}</table>'
-
-    @staticmethod
-    def draw_row_html_table(name: str, data: str) -> str:
-
-        return f'<tr><th class="p-2 h7 ">{name}:</th><th>{data}</td></th></tr>'
-
-    @staticmethod
-    def draw_cell_html_table(color: str, data: str) -> str:
-
-        return f'<td style="color: {color}" class="h7 w-auto text-center">{data}</td>'
-
-    @staticmethod
-    def check_filter_compliance(filters: Optional[Dict[str, List[Union[float, int, str, List[float]]]]], info: Dict[str,
-                                Union[float, bool, str, list[float]]]) -> bool:
-        permission = 0
-        if filters:
-            for key in filters.keys():
-                for value in filters.get(key):
-                    permission += sum(k == key and info[k] == value for k in info)
-        else:
-            permission = 1
-
-        return bool(permission)
+        return any(self.get_filter_value(key) == value for key, values in filters.items() for value in values)
