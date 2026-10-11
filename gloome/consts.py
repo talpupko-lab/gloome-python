@@ -7,7 +7,6 @@ from importlib.resources import files
 from gloome.tree.tree import Tree
 from gloome.services.service_functions import check_data, execute_all_actions
 
-MODE = ['draw_tree', 'compute_likelihood_of_tree', 'create_all_file_types', 'execute_all_actions']
 ROOTING_METHODS = [('mad', 'Minimal Ancestor Deviation'), ('mvr', 'Minimum Variance Rooting'),
                    ('midpoint', 'Midpoint Rooting'), ('outgroup', 'Outgroup Rooting')]
 IS_PRODUCTION = True
@@ -168,10 +167,6 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify the outdir path.
 \t\t--process_id <type=str>
 \t\t\tSpecify a process ID or it will be generated automatically.
-\t\t--mode <type=str>
-\t\t\tSpecify execution mode. Possible options: 
-\t\t\t('draw_tree', 'compute_likelihood_of_tree', 'create_all_file_types', 'execute_all_actions'). 
-\t\t\tDefault is {'execute_all_actions'}.
 \t\t--with_internal_nodes <type=int> 
 \t\t\tSpecify the tree has internal nodes. Default is 1.
 \t\t--categories_quantity <type=int>
@@ -183,10 +178,10 @@ USAGE = '''\tRequired parameters:
 \t\t--coefficient_bl <type=float> 
 \t\t\tSpecify coefficient_bl. Default is 1.0.
 \t\t--probability_lg <type=float> 
-\t\t\tSpecify probability_lg. Default is 0.9.
-\t\t--number_lg <type=float> 
-\t\t\tSpecify number_lg. Default is 5.
-\t\t--number_datasets <type=float> 
+\t\t\tSpecify probability_lg. Default is 0.5.
+\t\t--number_lg <type=int> 
+\t\t\tSpecify number_lg. Default is 1.
+\t\t--number_datasets <type=int> 
 \t\t\tSpecify number_datasets. Default is 100.
 \t\t--is_do_not_use_copap <type=int> 
 \t\t\tSpecify is_do_not_use_copap. Default is 0.
@@ -218,7 +213,7 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify file_table_of_pearson_correlation_tsv. Default is 1.
 \t\t--file_table_of_nodes_tsv <type=int>
 \t\t\tSpecify file_table_of_nodes_tsv. Default is 1.
-\t\t--file_branch_position_probabilities_tsv 
+\t\t--file_branch_position_probabilities_tsv <type=int>
 \t\t\tSpecify file_branch_position_probabilities_tsv. Default is 1.
 \t\t--file_table_of_branches_tsv <type=int> 
 \t\t\tSpecify file_table_of_branches_tsv. Default is 1.

@@ -511,7 +511,6 @@ class Tree:
                                            'down_vector': 'Down',
                                            'likelihood': 'Likelihood',
                                            'likelihood_vector': 'Vector of likelihood',
-                                           'sequence_likelihood': 'Likelihood of sequence',
                                            'log_likelihood': 'Log-likelihood',
                                            'log_likelihood_vector': 'Vector of log-likelihood',
                                            'marginal_vector': 'Marginal vector',
@@ -1852,13 +1851,14 @@ class Tree:
                                                'marginal_vector': 'Marginal vector',
                                                'probabilities_sequence_characters': 'Probability coefficient',
                                                'ancestral_sequence': 'Ancestral comparison',
-                                               'sequence_likelihood':
-                                               'Current conditional likelihood (subtree) of sequence',
+                                               'likelihood': 'Current conditional likelihood (subtree)',
+                                               'likelihood_vector':
+                                               'Vector of current conditional likelihood (subtree)',
                                                'log_likelihood': 'Current conditional log-likelihood (ln, subtree)',
                                                'log_likelihood_vector':
                                                'Vector of current conditional log-likelihood (ln, subtree)'}
             lists = ('children', 'pmatrix', 'up_vector', 'down_vector', 'marginal_vector',
-                     'probabilities_sequence_characters')
+                     'probabilities_sequence_characters', 'likelihood_vector', 'log_likelihood_vector')
             decimals = 8
         elif mode == 'branch_tsv':
             columns = columns if columns else {'father_name': 'Parent node', 'node': 'Child node', distance_name:

@@ -9,7 +9,6 @@ from gloome.utils import *
 
 class Config:
     def __init__(self, **attributes):
-        self.MODE = MODE[3:4]
         self.COMMAND_LINE = COMMAND_LINE
 
         self.RESULTS_DIR = RESULTS_DIR
@@ -254,27 +253,10 @@ class Config:
             'draw_tree': False,
             'create_all_file_types': False
         })
-
-        if 'compute_likelihood_of_tree' in self.MODE:
-            self.DEFAULT_ACTIONS.update({'execute_all_actions': True})
-            self.MAIN_ACTIONS.update({'compute_likelihood_of_tree': True})
-        if 'draw_tree' in self.MODE:
-            self.DEFAULT_ACTIONS.update({'calculate_tree': True,
-                                         'calculate_ancestral_sequence': True,
-                                         'execute_all_actions': True})
-            self.MAIN_ACTIONS.update({'draw_tree': True})
-        if 'create_all_file_types' in self.MODE or 'execute_all_actions' in self.MODE:
-            self.DEFAULT_ACTIONS.update({'calculate_tree': True,
-                                         'calculate_ancestral_sequence': True,
-                                         'execute_all_actions': True})
-            self.MAIN_ACTIONS.update({'create_all_file_types': True})
-        if 'execute_all_actions' in self.MODE:
-            self.DEFAULT_ACTIONS.update({'calculate_tree': True,
-                                         'calculate_ancestral_sequence': True,
-                                         'execute_all_actions': True})
-            self.MAIN_ACTIONS.update({'compute_likelihood_of_tree': True,
-                                      'draw_tree': True,
-                                      'create_all_file_types': True})
+        self.DEFAULT_ACTIONS.update({'calculate_tree': True,
+                                     'calculate_ancestral_sequence': True,
+                                     'execute_all_actions': True})
+        self.MAIN_ACTIONS.update({'create_all_file_types': True})
         if not self.CURRENT_ARGS.is_do_not_use_copap:
             self.DEFAULT_ACTIONS.update({'calculate_correlation': True})
 
@@ -290,10 +272,6 @@ class Config:
                             help=f'Specify the outdir path (optional).')
         parser.add_argument('--process_id', dest='process_id', type=str, required=False, default=self.PROCESS_ID,
                             help=f'Specify a process ID or it will be generated automatically (optional).')
-        parser.add_argument('--mode', dest='mode', required=False, action="extend", nargs="+", type=str,
-                            help=f'Specify execution mode (optional). Possible options: ("draw_tree", '
-                            f'"compute_likelihood_of_tree", "create_all_file_types", "execute_all_actions"). '
-                            f'Default is {self.MODE[3:4]}.')
         parser.add_argument('--with_internal_nodes', dest='with_internal_nodes', type=int, required=False,
                             default=int(self.CURRENT_ARGS.with_internal_nodes), help=f'Specify the tree has internal '
                             f'nodes (optional). Default is {int(self.CURRENT_ARGS.with_internal_nodes)}.')
@@ -425,8 +403,6 @@ class Config:
                 if arg_name == 'process_id':
                     if arg_value != self.PROCESS_ID:
                         self.change_process_id(arg_value)
-                elif arg_name == 'mode':
-                    setattr(self, arg_name.upper(), arg_value)
                 elif arg_name in ('msa_file', 'tree_file', 'out_dir'):
                     setattr(self, arg_name.upper(), Path(arg_value))
                 elif arg_name in ('with_internal_nodes',

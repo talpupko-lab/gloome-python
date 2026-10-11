@@ -33,7 +33,6 @@ class Node:
     log_likelihood: Union[float, np.float64, None]
     likelihood_vector: Optional[np.ndarray]
     likelihood: Union[float, np.float64, None]
-    sequence_likelihood: Union[float, np.float64]
     up_vector: Optional[np.ndarray]
     down_vector: Optional[np.ndarray]
     marginal_vector: Optional[np.ndarray]
@@ -71,7 +70,6 @@ class Node:
         self.log_likelihood = None
         self.likelihood_vector = None
         self.likelihood = None
-        self.sequence_likelihood = 1.0
         self.up_vector = None
         self.down_vector = None
         self.marginal_vector = None
@@ -94,10 +92,9 @@ class Node:
                 'distance_to_root_taking_into_coefficient', 'distance_to_root_vector_taking_into_coefficient',
                 'distance_to_nearest_taking_into_coefficient', 'level', 'levels_to_nearest', 'alphabet', 'pi_1',
                 'frequency', 'coefficient_bl', 'pmatrix', 'log_likelihood_vector', 'log_likelihood',
-                'sequence_likelihood', 'likelihood', 'up_vector', 'down_vector', 'marginal_vector',
-                'marginal_bl_vector', 'probability_vector', 'branch_probability_vector', 'probability_vector_gain',
-                'probability_vector_loss', 'sequence', 'probabilities_sequence_characters', 'ancestral_sequence',
-                'aliases']
+                'likelihood_vector', 'likelihood', 'up_vector', 'down_vector', 'marginal_vector', 'marginal_bl_vector',
+                'probability_vector', 'branch_probability_vector', 'probability_vector_gain', 'probability_vector_loss',
+                'sequence', 'probabilities_sequence_characters', 'ancestral_sequence', 'aliases']
 
     def get_list_nodes_info(self, with_additional_details: bool = False,
                             mode: Optional[str] = None,
@@ -205,7 +202,7 @@ class Node:
                   'full_distance_taking_into_coefficient': self.distance_to_root_vector_taking_into_coefficient,
                   'children': [i.name for i in self.children],
                   'likelihood': self.likelihood,
-                  'sequence_likelihood': self.sequence_likelihood,
+                  'likelihood_vector': self.likelihood_vector,
                   'log_likelihood': self.log_likelihood,
                   'log_likelihood_vector': self.log_likelihood_vector,
                   'probability_vector': self.probability_vector,
@@ -309,7 +306,6 @@ class Node:
         self.log_likelihood = None
         self.likelihood_vector = None
         self.likelihood = None
-        self.sequence_likelihood = 1.0
         self.up_vector = None
         self.down_vector = None
         self.marginal_vector = None
