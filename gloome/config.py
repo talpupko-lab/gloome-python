@@ -1,4 +1,6 @@
 import argparse
+import errno
+import json
 import traceback
 
 from sys import exit
@@ -73,11 +75,12 @@ class Config:
                 for error_type, error in self.CALCULATED_ARGS.err_list:
                     print(f'{error_type}: {error}')
                 print(self.USAGE)
-                exit()
+                exit(1)
 
     def get_selected_files(self) -> Dict[str, bool]:
         selected_files = {'file_interactive_tree_html': self.CURRENT_ARGS.file_interactive_tree_html,
                           'file_newick_tree_png': self.CURRENT_ARGS.file_newick_tree_png,
+                          'file_branch_length_models_tsv': self.CURRENT_ARGS.file_branch_length_models_tsv,
                           'file_table_of_coevolution_tsv': self.CURRENT_ARGS.file_table_of_coevolution_tsv,
                           'file_simulated_datasets_fastas': self.CURRENT_ARGS.file_simulated_datasets_fastas,
                           'file_barplot_of_correlation_svg': self.CURRENT_ARGS.file_barplot_of_correlation_svg,
@@ -96,7 +99,12 @@ class Config:
                           'file_table_of_attributes_tsv': self.CURRENT_ARGS.file_table_of_attributes_tsv,
                           'file_table_of_parsimony_and_homoplasy_scores_tsv':
                               self.CURRENT_ARGS.file_table_of_parsimony_and_homoplasy_scores_tsv,
-                          'file_phylogenetic_tree_nwk': self.CURRENT_ARGS.file_phylogenetic_tree_nwk}
+                          'file_phylogenetic_tree_nwk': self.CURRENT_ARGS.file_phylogenetic_tree_nwk,
+                          'file_all_nodes_fasta': self.CURRENT_ARGS.file_all_nodes_fasta,
+                          'file_phylogenetic_distance_matrix_svg':
+                              self.CURRENT_ARGS.file_phylogenetic_distance_matrix_svg,
+                          'file_sequence_identity_matrix_svg': self.CURRENT_ARGS.file_sequence_identity_matrix_svg,
+                          'file_binary_mapping_svg': self.CURRENT_ARGS.file_binary_mapping_svg}
         return selected_files
 
     def execute_action(self, func, *args, **kwargs):
@@ -104,10 +112,21 @@ class Config:
             val = func(*args, **kwargs)
             if val:
                 self.JOB_LOGGER.info(f'\n\tSuccessfully Command \'{func.__name__}\' executed successfully. -> {val}\n')
-        except ValueError:
+        except Exception as exception:
             format_exc = f'{traceback.format_exc()}'
             self.JOB_LOGGER.info(f'Failed to execute the command \'{func.__name__}\' -> {format_exc}')
-            self.CALCULATED_ARGS.err_list.append((f'Failed to execute the command \'{func.__name__}\'', format_exc))
+            self.CALCULATED_ARGS.err_list.append((f'Failed to execute the command \'{func.__name__}\'',
+                                                  self.describe_exception(exception)))
+
+    @staticmethod
+    def describe_exception(exception: BaseException) -> str:
+        """One-line, user-facing description of why a job step failed (the full traceback goes to the job log)."""
+        if isinstance(exception, MemoryError):
+            return 'The job ran out of memory.'
+        if isinstance(exception, OSError) and exception.errno == errno.ENOSPC:
+            return 'The server ran out of disk space while writing the results.'
+
+        return f'{type(exception).__name__}: {exception}'
 
     def execute_calculation(self):
         if not self.CALCULATED_ARGS.err_list and self.DEFAULT_ACTIONS.get('calculate_tree', False):
@@ -130,10 +149,14 @@ class Config:
                                 probability_lg=self.CURRENT_ARGS.probability_lg,
                                 number_lg=self.CURRENT_ARGS.number_lg,
                                 number_datasets=self.CURRENT_ARGS.number_datasets)
+        if self.CALCULATED_ARGS.err_list:
+            for error_type, error in self.CALCULATED_ARGS.err_list:
+                print(f'{error_type}: {error}')
+            exit(1)
 
     def check_arguments_for_errors(self) -> bool:
         if self.TREE_FILE.is_file():
-            with open(self.TREE_FILE, 'r') as f:
+            with open(self.TREE_FILE, 'r', encoding='utf-8') as f:
                 if self.VALIDATION_ACTIONS.get('del_bootstrap_values', False):
                     self.CALCULATED_ARGS.newick_text = self.ACTIONS.del_bootstrap_values(f.read().strip())
                 else:
@@ -143,7 +166,7 @@ class Config:
                                                   f'File "{self.TREE_FILE}" does not exist '))
 
         if self.MSA_FILE.is_file():
-            with open(self.MSA_FILE, 'r') as f:
+            with open(self.MSA_FILE, 'r', encoding='utf-8') as f:
                 self.CALCULATED_ARGS.msa = f.read().strip()
         else:
             self.CALCULATED_ARGS.err_list.append((f'The File does not exist',
@@ -182,7 +205,15 @@ class Config:
                                         self.CURRENT_ARGS.file_table_of_parsimony_and_homoplasy_scores_tsv,
                                         self.CURRENT_ARGS.file_phylogenetic_tree_nwk,
                                         self.CURRENT_ARGS.rooting_method,
-                                        self.CURRENT_ARGS.leaf))
+                                        self.CURRENT_ARGS.leaf,
+                                        self.CURRENT_ARGS.is_optimize_bl_per_branch,
+                                        self.CURRENT_ARGS.file_branch_length_models_tsv,
+                                        self.CURRENT_ARGS.branch_length_min_bound,
+                                        self.CURRENT_ARGS.branch_length_max_bound,
+                                        self.CURRENT_ARGS.file_all_nodes_fasta,
+                                        self.CURRENT_ARGS.file_phylogenetic_distance_matrix_svg,
+                                        self.CURRENT_ARGS.file_sequence_identity_matrix_svg,
+                                        self.CURRENT_ARGS.file_binary_mapping_svg))
 
         if not self.CALCULATED_ARGS.err_list and self.VALIDATION_ACTIONS.get('set_root', False):
             try:
@@ -204,10 +235,13 @@ class Config:
                                            categories_quantity=self.CURRENT_ARGS.categories_quantity,
                                            alpha=self.CURRENT_ARGS.alpha, pi_1=self.CURRENT_ARGS.pi_1,
                                            coefficient_bl=self.CURRENT_ARGS.coefficient_bl,
+                                           branch_length_min_bound=self.CURRENT_ARGS.branch_length_min_bound,
+                                           branch_length_max_bound=self.CURRENT_ARGS.branch_length_max_bound,
                                            is_optimize_pi=self.CURRENT_ARGS.is_optimize_pi,
                                            is_optimize_pi_average=self.CURRENT_ARGS.is_optimize_pi_average,
                                            is_optimize_alpha=self.CURRENT_ARGS.is_optimize_alpha,
-                                           is_optimize_bl=self.CURRENT_ARGS.is_optimize_bl)
+                                           is_optimize_bl=self.CURRENT_ARGS.is_optimize_bl,
+                                           is_optimize_bl_per_branch=self.CURRENT_ARGS.is_optimize_bl_per_branch)
             except ValueError:
                 self.CALCULATED_ARGS.err_list.append((f'MSA error',
                                                       f'Wrong MSA format. Please provide MSA in FASTA format.'))
@@ -227,9 +261,12 @@ class Config:
                 self.CALCULATED_ARGS.err_list.append((f'Strange error',
                                                       f'Strange error.'))
 
-        if not self.CALCULATED_ARGS.err_list and self.CURRENT_ARGS.is_optimize_bl:
+        if not self.CALCULATED_ARGS.err_list and (self.CURRENT_ARGS.is_optimize_bl or
+                                                  self.CURRENT_ARGS.is_optimize_bl_per_branch):
             try:
                 self.CURRENT_ARGS.coefficient_bl = self.CALCULATED_ARGS.newick_tree.coefficient_bl
+                self.CURRENT_ARGS.branch_length_min_bound = self.CALCULATED_ARGS.newick_tree.branch_length_bounds[0]
+                self.CURRENT_ARGS.branch_length_max_bound = self.CALCULATED_ARGS.newick_tree.branch_length_bounds[1]
             except ValueError:
                 self.CALCULATED_ARGS.err_list.append((f'Strange error',
                                                       f'Strange error.'))
@@ -285,6 +322,14 @@ class Config:
         parser.add_argument('--coefficient_bl', dest='coefficient_bl', type=float, required=False,
                             help=f'Specify coefficient_bl (optional). Default is {self.CURRENT_ARGS.coefficient_bl}.',
                             default=self.CURRENT_ARGS.coefficient_bl)
+        parser.add_argument('--branch_length_min_bound', dest='branch_length_min_bound', type=float, required=False,
+                            help=f'Specify branch_length_min_bound (optional). Default is '
+                            f'{self.CURRENT_ARGS.branch_length_min_bound}.',
+                            default=self.CURRENT_ARGS.branch_length_min_bound)
+        parser.add_argument('--branch_length_max_bound', dest='branch_length_max_bound', type=float, required=False,
+                            help=f'Specify branch_length_max_bound (optional). Default is '
+                            f'{self.CURRENT_ARGS.branch_length_max_bound}.',
+                            default=self.CURRENT_ARGS.branch_length_max_bound)
         parser.add_argument('--probability_lg', dest='probability_lg', type=float, required=False,
                             help=f'Specify probability_lg (optional). Default is {self.CURRENT_ARGS.probability_lg}.',
                             default=self.CURRENT_ARGS.probability_lg)
@@ -318,6 +363,11 @@ class Config:
         parser.add_argument('--is_optimize_bl', dest='is_optimize_bl', type=int, required=False,
                             help=f'Specify is_optimize_bl (optional). Default is '
                             f'{int(self.CURRENT_ARGS.is_optimize_bl)}.', default=int(self.CURRENT_ARGS.is_optimize_bl))
+        parser.add_argument('--is_optimize_bl_per_branch', dest='is_optimize_bl_per_branch', type=int, required=False,
+                            help=f'Specify is_optimize_bl_per_branch (optional): optimize every branch length instead '
+                            f'of one coefficient (takes precedence over is_optimize_bl) and write '
+                            f'BranchLengthModels.tsv. Default is {int(self.CURRENT_ARGS.is_optimize_bl_per_branch)}.',
+                            default=int(self.CURRENT_ARGS.is_optimize_bl_per_branch))
         parser.add_argument('--is_do_not_use_copap', dest='is_do_not_use_copap', type=int, required=False,
                             help=f'Specify is_do_not_use_copap (optional). Default is '
                             f'{int(self.CURRENT_ARGS.is_do_not_use_copap)}.',
@@ -330,6 +380,11 @@ class Config:
                             help=f'Specify file_newick_tree_png (optional). Default is '
                             f'{int(self.CURRENT_ARGS.file_newick_tree_png)}.',
                             default=int(self.CURRENT_ARGS.file_newick_tree_png))
+        parser.add_argument('--file_branch_length_models_tsv',
+                            dest='file_branch_length_models_tsv', type=int, required=False,
+                            help=f'Specify file_branch_length_models_tsv (optional). Default is '
+                            f'{int(self.CURRENT_ARGS.file_branch_length_models_tsv)}.',
+                            default=int(self.CURRENT_ARGS.file_branch_length_models_tsv))
         parser.add_argument('--file_table_of_coevolution_tsv',
                             dest='file_table_of_coevolution_tsv', type=int, required=False,
                             help=f'Specify file_table_of_coevolution_tsv (optional). Default is '
@@ -395,6 +450,23 @@ class Config:
                             required=False, help=f'Specify file_phylogenetic_tree_nwk (optional). Default is '
                             f'{int(self.CURRENT_ARGS.file_phylogenetic_tree_nwk)}.',
                             default=int(self.CURRENT_ARGS.file_phylogenetic_tree_nwk))
+        parser.add_argument('--file_all_nodes_fasta', dest='file_all_nodes_fasta', type=int,
+                            required=False, help=f'Specify file_all_nodes_fasta (optional). Default is '
+                            f'{int(self.CURRENT_ARGS.file_all_nodes_fasta)}.',
+                            default=int(self.CURRENT_ARGS.file_all_nodes_fasta))
+        parser.add_argument('--file_phylogenetic_distance_matrix_svg', dest='file_phylogenetic_distance_matrix_svg',
+                            help=f'Specify file_phylogenetic_distance_matrix_svg (optional). Default is '
+                            f'{int(self.CURRENT_ARGS.file_phylogenetic_distance_matrix_svg)}.',
+                            type=int, required=False,
+                            default=int(self.CURRENT_ARGS.file_phylogenetic_distance_matrix_svg))
+        parser.add_argument('--file_sequence_identity_matrix_svg', dest='file_sequence_identity_matrix_svg', type=int,
+                            required=False, help=f'Specify file_sequence_identity_matrix_svg (optional). Default is '
+                            f'{int(self.CURRENT_ARGS.file_sequence_identity_matrix_svg)}.',
+                            default=int(self.CURRENT_ARGS.file_sequence_identity_matrix_svg))
+        parser.add_argument('--file_binary_mapping_svg', dest='file_binary_mapping_svg', type=int,
+                            required=False, help=f'Specify file_binary_mapping_svg (optional). Default is '
+                            f'{int(self.CURRENT_ARGS.file_binary_mapping_svg)}.',
+                            default=int(self.CURRENT_ARGS.file_binary_mapping_svg))
 
         args = parser.parse_args()
 
@@ -410,9 +482,11 @@ class Config:
                                   'is_optimize_pi_average',
                                   'is_optimize_alpha',
                                   'is_optimize_bl',
+                                  'is_optimize_bl_per_branch',
                                   'is_do_not_use_copap',
                                   'file_interactive_tree_html',
                                   'file_newick_tree_png',
+                                  'file_branch_length_models_tsv',
                                   'file_table_of_coevolution_tsv',
                                   'file_simulated_datasets_fastas',
                                   'file_barplot_of_correlation_svg',
@@ -426,7 +500,11 @@ class Config:
                                   'file_log_likelihood_tsv',
                                   'file_table_of_attributes_tsv',
                                   'file_table_of_parsimony_and_homoplasy_scores_tsv',
-                                  'file_phylogenetic_tree_nwk'):
+                                  'file_phylogenetic_tree_nwk',
+                                  'file_all_nodes_fasta',
+                                  'file_phylogenetic_distance_matrix_svg',
+                                  'file_sequence_identity_matrix_svg',
+                                  'file_binary_mapping_svg'):
                     if hasattr(self.CURRENT_ARGS, arg_name):
                         setattr(self.CURRENT_ARGS, arg_name, bool(arg_value))
                 else:

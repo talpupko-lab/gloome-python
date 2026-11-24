@@ -82,6 +82,8 @@ DEFAULT_FORM_ARGUMENTS = {
     'alpha': 0.5,
     'pi_1': 0.5,
     'coefficient_bl': 1.0,
+    'branch_length_min_bound': 0.0001,
+    'branch_length_max_bound': 2.0,
     'probability_lg': 0.5,
     'number_lg': 1,
     'number_datasets': 100,
@@ -93,9 +95,11 @@ DEFAULT_FORM_ARGUMENTS = {
     'is_optimize_pi_average': False,
     'is_optimize_alpha': True,
     'is_optimize_bl': True,
+    'is_optimize_bl_per_branch': False,
     'is_do_not_use_copap': False,
     'file_interactive_tree_html': False,
     'file_newick_tree_png': False,
+    'file_branch_length_models_tsv': True,
     'file_table_of_coevolution_tsv': True,
     'file_simulated_datasets_fastas': True,
     'file_barplot_of_correlation_svg': True,
@@ -109,7 +113,11 @@ DEFAULT_FORM_ARGUMENTS = {
     'file_log_likelihood_tsv': True,
     'file_table_of_attributes_tsv': True,
     'file_table_of_parsimony_and_homoplasy_scores_tsv': True,
-    'file_phylogenetic_tree_nwk': True
+    'file_phylogenetic_tree_nwk': True,
+    'file_all_nodes_fasta': True,
+    'file_phylogenetic_distance_matrix_svg': True,
+    'file_sequence_identity_matrix_svg': True,
+    'file_binary_mapping_svg': True
 }
 
 DEFAULT_ARGUMENTS = DefaultArgs(**{
@@ -177,6 +185,10 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify pi_1. Default is 0.5.
 \t\t--coefficient_bl <type=float> 
 \t\t\tSpecify coefficient_bl. Default is 1.0.
+\t\t--branch_length_min_bound <type=float> 
+\t\t\tSpecify branch_length_min_bound. Default is 0.0001.
+\t\t--branch_length_max_bound <type=float> 
+\t\t\tSpecify branch_length_max_bound. Default is 2.0.
 \t\t--probability_lg <type=float> 
 \t\t\tSpecify probability_lg. Default is 0.5.
 \t\t--number_lg <type=int> 
@@ -193,10 +205,20 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify is_optimize_alpha. Default is 1.
 \t\t--is_optimize_bl <type=int> 
 \t\t\tSpecify is_optimize_bl. Default is 1.
+\t\t--is_optimize_bl_per_branch <type=int> 
+\t\t\tSpecify is_optimize_bl_per_branch. Default is 0.
 \t\t--file_interactive_tree_html <type=int> 
 \t\t\tSpecify file_interactive_tree_html. Default is 0.
 \t\t--file_newick_tree_png <type=int> 
 \t\t\tSpecify file_newick_tree_png. Default is 0.
+\t\t--file_phylogenetic_distance_matrix_svg <type=int> 
+\t\t\tSpecify file_phylogenetic_distance_matrix_svg. Default is 1.
+\t\t--file_sequence_identity_matrix_svg <type=int> 
+\t\t\tSpecify file_sequence_identity_matrix_svg. Default is 1.
+\t\t--file_binary_mapping_svg <type=int> 
+\t\t\tSpecify file_binary_mapping_svg. Default is 1.
+\t\t--file_branch_length_models_tsv <type=int>
+\t\t\tSpecify file_branch_length_models_tsv. Default is 1.
 \t\t--file_table_of_coevolution_tsv <type=int>
 \t\t\tSpecify file_table_of_coevolution_tsv. Default is 1.
 \t\t--file_simulated_datasets_fastas <type=int>
@@ -225,6 +247,8 @@ USAGE = '''\tRequired parameters:
 \t\t\tSpecify file_table_of_parsimony_and_homoplasy_scores_tsv. Default is 1.
 \t\t--file_phylogenetic_tree_nwk <type=int> 
 \t\t\tSpecify file_phylogenetic_tree_nwk. Default is 1.
+\t\t--file_all_nodes_fasta <type=int> 
+\t\t\tSpecify file_all_nodes_fasta. Default is 1.
 \t\t--rooting_method <type=str> 
 \t\t\tSpecify tree rooting method. Possible options: ('mad', 'mvr', 'midpoint', 'outgroup').
 \t\t\tmad - Minimal Ancestor Deviation

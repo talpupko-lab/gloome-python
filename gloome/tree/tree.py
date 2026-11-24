@@ -6,24 +6,29 @@ import seaborn as sns
 import re
 import gc
 
-from shutil import rmtree
 from json import loads, dumps
 from pathlib import Path
 from d3blocks import D3Blocks
 from typing import Optional, List, Union, Dict, Tuple, Set, Any, Callable
-from Bio import Phylo
+from Bio import Phylo, AlignIO
 from Bio.Phylo.NewickIO import Writer
-from numpy import ndarray, dtype, void
 from scipy.stats import gamma, pearsonr, distributions, beta as sp_beta, kstest
 from scipy.special import gammainc
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize, minimize_scalar
 from io import StringIO
+from pymsaviz import MsaViz
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
+from matplotlib.transforms import offset_copy
 
 from .node import Node
+from . import pairs
 from .npencoder import NpEncoder
 
 eps = 5e-324
 eps2 = 1e-10
+branch_length_starts_quantity = 5
+branch_length_max_rounds = 10
 
 
 class Tree:
@@ -41,6 +46,7 @@ class Tree:
     likelihood: Optional[Union[float, np.float64]] = None
     posterior_rates: Optional[np.ndarray] = None
     correlation_vector: Optional[np.ndarray] = None
+    correlation_stream: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
     calculated_ancestor_sequence: bool = False
     calculated_tree: bool = False
     calculated_likelihood: bool = False
@@ -50,9 +56,19 @@ class Tree:
     nodes_objects: Optional[List[Node]] = None
     nodes_objects_post_order: Optional[List[Node]] = None
     leaves_objects: Optional[List[Node]] = None
-    alphabet_length: int
-    msa_length: int
-    rate_vector_length: int
+    alphabet_length: int = 2
+    msa_length: int = 1
+    rate_vector_length: int = 1
+    pearson_correlation_note: str = ''
+    coevolution_notes: Dict[str, str] = {}
+    site_pattern_index: Optional[np.ndarray] = None
+    pattern_weights: Optional[np.ndarray] = None
+    patterns_length: int = 0
+    leaf_pattern_vectors: Optional[Dict[str, np.ndarray]] = None
+    site_patterns_source: Optional[Tuple[Tuple[str, ...], int]] = None
+    branch_length_starts: Optional[List[Dict[str, Any]]] = None
+    single_coefficient_fit: Optional[Dict[str, Any]] = None
+    branch_length_bounds = (1e-4, 2.0)
 
     def __init__(self, data: Optional[Union[str, Node]] = None, node_name: Optional[str] = None, **kwargs) -> None:
         """
@@ -66,14 +82,21 @@ class Tree:
             pi_0 (float, np.float64, int, optional): `None` (default)
             pi_1 (float, np.float64, int, optional): `None` (default)
             coefficient_bl (float, np.float64, int, optional): `None` (default)
+            branch_length_min_bound (float, np.float64, int, optional): `None` (default)
+            branch_length_max_bound (float, np.float64, int, optional): `None` (default)
             is_optimize_pi (bool, optional): `None` (default)
             is_optimize_pi_average (bool, optional): `None` (default)
             is_optimize_alpha (bool, optional): `None` (default)
             is_optimize_bl (bool, optional): `None` (default)
+            is_optimize_bl_per_branch (bool, optional): `None` (default)
+            bl_starts_quantity (int, optional): `None` (default) -- starting points of the per-branch optimization;
+                `None` means `branch_length_starts_quantity`
+            seed (int, optional): `None` (default)
         """
         available_parameters = {'data', 'node_name', 'msa', 'categories_quantity', 'alpha', 'beta', 'pi_0', 'pi_1',
-                                'coefficient_bl', 'is_optimize_pi', 'is_optimize_pi_average', 'is_optimize_alpha',
-                                'is_optimize_bl', 'seed'}
+                                'coefficient_bl', 'branch_length_min_bound', 'branch_length_max_bound',
+                                'is_optimize_pi', 'is_optimize_pi_average', 'is_optimize_alpha', 'is_optimize_bl',
+                                'is_optimize_bl_per_branch', 'bl_starts_quantity', 'seed'}
         invalid_parameters = set(kwargs.keys()) - available_parameters
         for key in invalid_parameters:
             del kwargs[key]
@@ -100,7 +123,12 @@ class Tree:
         self.rate_vector_length = 1
         self.pi_1, self.coefficient_bl = None, 1
         self.log_likelihood_vector = self.likelihood_vector = self.correlation_vector = self.posterior_rates = None
+        self.correlation_stream = None
+        self.pearson_correlation_note = ''
+        self.coevolution_notes = {}
         self.log_likelihood = self.likelihood = 0.0
+        self.site_pattern_index = self.pattern_weights = self.leaf_pattern_vectors = self.site_patterns_source = None
+        self.branch_length_starts = self.single_coefficient_fit = None
 
         self.calculated_ancestor_sequence = self.calculated_tree = self.calculated_likelihood = False
 
@@ -119,7 +147,8 @@ class Tree:
                 'log_likelihood_vector', 'log_likelihood', 'likelihood_vector', 'likelihood', 'posterior_rates',
                 'correlation_vector', 'calculated_ancestor_sequence', 'calculated_tree', 'calculated_likelihood',
                 'all_nodes', 'all_nodes_objects', 'nodes_objects', 'nodes_objects_post_order', 'leaves_objects',
-                'alphabet_length', 'msa_length', 'rate_vector_length']
+                'alphabet_length', 'msa_length', 'rate_vector_length', 'site_pattern_index', 'pattern_weights',
+                'patterns_length']
 
     def __len__(self) -> int:
 
@@ -176,7 +205,10 @@ class Tree:
                 'leaves_objects': self.leaves_objects,
                 'alphabet_length': self.alphabet_length,
                 'msa_length': self.msa_length,
-                'rate_vector_length': self.rate_vector_length}
+                'rate_vector_length': self.rate_vector_length,
+                'site_pattern_index': self.site_pattern_index,
+                'pattern_weights': self.pattern_weights,
+                'patterns_length': self.patterns_length}
 
     def print_args(self, prefix_name: str = '', prefix: str = '', sort: bool = False) -> None:
         if all((prefix_name, prefix)):
@@ -192,16 +224,22 @@ class Tree:
                       pi_0: Optional[Union[float, np.float64, int]] = None,
                       pi_1: Optional[Union[float, np.float64, int]] = None,
                       coefficient_bl: Optional[Union[float, np.float64, int]] = None,
+                      branch_length_min_bound: Optional[Union[float, np.float64, int]] = None,
+                      branch_length_max_bound: Optional[Union[float, np.float64, int]] = None,
                       is_optimize_pi: Optional[bool] = None,
                       is_optimize_pi_average: Optional[bool] = None,
                       is_optimize_alpha: Optional[bool] = None,
                       is_optimize_bl: Optional[bool] = None,
+                      is_optimize_bl_per_branch: Optional[bool] = None,
+                      bl_starts_quantity: Optional[int] = None,
                       seed: Optional[int] = None) -> None:
 
         if seed is not None:
             np.random.seed(seed)
 
         if isinstance(msa, str):
+            replace_mask_pattern = r'[\'\"]'
+            msa = re.sub(replace_mask_pattern, '', msa)
             self.msa = self.get_msa_dict(msa)
         elif isinstance(msa, dict):
             self.msa = msa
@@ -217,16 +255,26 @@ class Tree:
 
         self.set_all(categories_quantity, alpha, beta, pi_0, pi_1, coefficient_bl)
 
-        self.optimize_coefficient_bl(is_optimize_bl)
-        self.optimize_pi(is_optimize_pi, is_optimize_pi_average)
-        self.optimize_alpha(is_optimize_alpha)
+        branch_length_min_bound = branch_length_min_bound if branch_length_min_bound else self.branch_length_bounds[0]
+        branch_length_max_bound = branch_length_max_bound if branch_length_max_bound else self.branch_length_bounds[1]
+        self.branch_length_bounds = (branch_length_min_bound, branch_length_max_bound)
 
-        if (is_optimize_alpha or is_optimize_pi or is_optimize_pi_average) and is_optimize_bl:
+        if is_optimize_bl_per_branch:
+            self.optimize_branch_lengths_and_parameters(is_optimize_pi, is_optimize_pi_average, is_optimize_alpha,
+                                                        bl_starts_quantity, seed=seed)
+        else:
             self.optimize_coefficient_bl(is_optimize_bl)
+            self.optimize_pi(is_optimize_pi, is_optimize_pi_average)
+            self.optimize_alpha(is_optimize_alpha)
+
+            if (is_optimize_alpha or is_optimize_pi or is_optimize_pi_average) and is_optimize_bl:
+                self.optimize_coefficient_bl(is_optimize_bl)
 
         self.set_all(categories_quantity=self.categories_quantity, alpha=self.alpha, pi_1=self.pi_1,
                      coefficient_bl=self.coefficient_bl)
         self.set_distance_taking_into_coefficient()
+        self.clean_all()
+        self.calculated_likelihood = self.calculated_tree = False
 
     def set_distance_taking_into_coefficient(self) -> None:
         for current_node in self.all_nodes_objects:
@@ -390,8 +438,10 @@ class Tree:
             list_end = [i for i in range(len_newick) if newick[i:i + 1] == ')']
             list_start = [i for i in range(len_newick) if newick[i:i + 1] == '(']
             list_children = []
-
-            num = self.__counter()
+            pattern = r'(?<=[(),])nd(\d+)(?=:|[),;])'
+            node_ids_list = np.asarray(pd.Series(re.findall(pattern, newick))).astype(int)
+            max_ids = node_ids_list.max() if len(node_ids_list) else 0
+            num = self.__counter(max_ids)
 
             while list_start:
                 int_start = list_start.pop(-1)
@@ -403,7 +453,7 @@ class Tree:
                                                                           newick.find(';', int_end), newick.find(')',
                                                                           int_end)] if x >= 0])]
 
-                (visibility, node_name) = (True, node_name) if node_name else (False, 'nd' + str(num()).rjust(4, '0'))
+                (visibility, node_name) = (True, node_name) if node_name else (False, f'nd{num()}')
 
                 sub_str = newick[int_start:int_end]
                 list_children.append({'children': sub_str, 'node': node_name, 'distance_to_father': distance_to_father,
@@ -429,7 +479,7 @@ class Tree:
                 current_node.set_levels_and_distance_to_nearest()
                 current_node.aliases = {'node': 'name', 'distance': 'distance_to_father'}
                 if current_node.node_type in ('node', ) and self.is_bootstrap_value(current_node.name):
-                    current_node.name = 'nd' + str(num()).rjust(4, '0')
+                    current_node.name = f'nd{num()}'
 
             return self
 
@@ -465,7 +515,7 @@ class Tree:
 
         return list_result
 
-    def __set_children_list_from_string(self, str_children: str, father: Node, num) -> None:
+    def __set_children_list_from_string(self, str_children: str, father: Node, num: Callable) -> None:
         str_children = str_children[1:-1] if str_children.startswith('(') and str_children.endswith(
             ')') else str_children
         lst_nodes = str_children.split(',')
@@ -622,19 +672,21 @@ class Tree:
 
     def calculate_marginal(self) -> None:
         for current_node in self.all_nodes_objects:
-            current_node.calculate_marginal(self.rate_vector_length, self.msa_length)
+            current_node.calculate_marginal(self.rate_vector_length, self.patterns_length)
 
     def calculate_down(self) -> None:
         for current_node in self.all_nodes_objects:
-            current_node.calculate_down(self.rate_vector_length, self.alphabet_length, self.msa_length)
+            current_node.calculate_down(self.rate_vector_length, self.alphabet_length, self.patterns_length)
 
     def calculate_up(self) -> None:
         self.alphabet_length = len(self.alphabet)
         self.msa_length = len(next(iter(self.msa.values())))
         self.rate_vector_length = len(self.rate_vector)
 
+        self.set_site_patterns()
         self.initialize_leaf_up_vectors()
         self.initialize_node_up_vectors()
+        self.root.calculate_likelihood()
 
         self.likelihood_vector = self.root.likelihood_vector
         self.likelihood = self.root.likelihood
@@ -651,22 +703,49 @@ class Tree:
 
     def initialize_node_up_vectors(self) -> None:
         for current_node in self.nodes_objects_post_order:
-            current_node.calculate_up(self.rate_vector_length, self.alphabet_length, self.msa_length)
+            current_node.calculate_up(self.rate_vector_length, self.alphabet_length, self.patterns_length)
 
     def initialize_leaf_up_vectors(self) -> None:
+        shape = (self.rate_vector_length, self.alphabet_length, self.patterns_length)
+        no_scaling = np.zeros((self.rate_vector_length, self.patterns_length), dtype=np.float64)
         for leaf in self.leaves_objects:
-            sequence = np.asarray(list(self.msa[leaf.name]))
-            up_vector = np.zeros((self.rate_vector_length, self.alphabet_length, self.msa_length), dtype=np.float64)
-            mask_0 = (sequence == '0')
-            mask_1 = (sequence == '1')
+            leaf.up_vector = np.broadcast_to(self.leaf_pattern_vectors[leaf.name], shape)
+            leaf.up_log_scale = no_scaling
 
-            up_vector[:, 0, mask_0] = 1.0
-            up_vector[:, 1, mask_1] = 1.0
+    def set_site_patterns(self) -> None:
+        """
+        Compress the MSA columns to unique site patterns. The engine (up/down/marginal) runs once per pattern and
+        per-site outputs are expanded back through `site_pattern_index`; `pattern_weights` counts each pattern's
+        sites. Also builds each leaf's (alphabet, pattern) state vector. Rebuilt only when the leaf sequences
+        change: they are held by reference, so reassigning `msa` or any of its sequences triggers a rebuild.
+        """
+        sequences = tuple(self.msa[leaf.name] for leaf in self.leaves_objects)
+        if self.site_patterns_source is not None:
+            cached_sequences, cached_alphabet_length = self.site_patterns_source
+            if (cached_alphabet_length == self.alphabet_length and len(cached_sequences) == len(sequences)
+                    and all(cached is current for cached, current in zip(cached_sequences, sequences))):
+                return
 
-            mask_gap = np.isin(sequence, ('-', ) + self.get_unknown_characters())
-            up_vector[:, :, mask_gap] = 1.0
+        raw = np.frombuffer(''.join(sequences).encode('utf-32-le'), dtype=np.uint32).reshape(len(sequences),
+                                                                                             self.msa_length)
+        patterns, site_pattern_index, pattern_weights = np.unique(raw, axis=1, return_inverse=True,
+                                                                  return_counts=True)
+        self.site_pattern_index = site_pattern_index.reshape(-1)
+        self.pattern_weights = pattern_weights
+        self.patterns_length = patterns.shape[1]
 
-            leaf.up_vector = up_vector
+        gap_codes = [ord(char) for char in ('-', ) + self.get_unknown_characters()]
+        self.leaf_pattern_vectors = {}
+        for leaf, pattern_row in zip(self.leaves_objects, patterns):
+            leaf_vector = np.zeros((self.alphabet_length, self.patterns_length), dtype=np.float64)
+            leaf_vector[0, pattern_row == ord('0')] = 1.0
+            leaf_vector[1, pattern_row == ord('1')] = 1.0
+            leaf_vector[:, np.isin(pattern_row, gap_codes)] = 1.0
+            self.leaf_pattern_vectors[leaf.name] = leaf_vector
+
+        for current_node in self.all_nodes_objects:
+            current_node.site_pattern_index = self.site_pattern_index
+        self.site_patterns_source = (sequences, self.alphabet_length)
 
     def get_msa_dict(self, msa: str, alphabet: Optional[Union[Tuple[str, ...], str]] = None, only_leaves: bool = True
                      ) -> Dict[str, Union[Tuple[int, ...], str]]:
@@ -703,6 +782,9 @@ class Tree:
             self.clean_all()
 
             self.calculate_up()
+            for current_node in self.nodes_objects:
+                if current_node.likelihood_vector is None:
+                    current_node.calculate_likelihood()
             self.calculate_down()
             self.calculate_marginal()
 
@@ -718,15 +800,19 @@ class Tree:
             self.clean_all()
             self.calculate_up()
 
-    def get_fasta_text(self, msa: Optional[Dict[str, str]] = None) -> str:
+    def get_fasta_text(self, msa: Optional[Dict[str, str]] = None, with_internal_nodes: Optional[bool] = None) -> str:
+        if with_internal_nodes:
+            result = ''.join(f'>{n.name}\n{n.sequence}\n' for n in self.all_nodes_objects).strip()
+        else:
+            result = ''.join(f'>{k}\n{v}\n' for k, v in (self.msa if msa is None else msa).items()).strip()
 
-        return ''.join(f'>{k}\n{v}\n' for k, v in (self.msa if msa is None else msa).items()).strip()
+        return result
 
     def get_json_structure(self, return_table: bool = False,
                            columns: Optional[Dict[str, str]] = None,
                            mode: str = 'node',
                            taking_into_coefficient: bool = True
-                           ) -> Dict[str, Union[List[str], str]]:
+                           ) -> Dict[str, Any]:
         """
         Args:
             return_table (bool, optional): `False` (default).
@@ -753,12 +839,280 @@ class Tree:
         else:
             dict_json = self.root.node_to_json()
 
-        return loads(dumps(dict_json, cls=NpEncoder).replace(f'\'', r'"'))
+        return loads(dumps(dict_json, cls=NpEncoder))
 
-    def tree_to_fasta_file(self, file_name: str = 'file.fasta') -> str:
-        fasta_text = self.get_fasta_text()
+    def tree_to_fasta_file(self, file_name: str = 'file.fasta', with_internal_nodes: Optional[bool] = None) -> str:
+        fasta_text = self.get_fasta_text(with_internal_nodes=with_internal_nodes)
 
         return self.write_file(file_name, fasta_text)
+
+    def tree_to_phylogenetic_distance_matrix(self, file_name: str = 'PhylogeneticDistanceMatrix.svg') -> str:
+        def gat_all_parents(cur_leaf: Node) -> Dict[str, Node]:
+            parents = dict()
+            father = cur_leaf.father
+            while father:
+                parents.update({father.name: father})
+                father = father.father
+
+            return parents
+
+        def gat_common_parent(parents: Dict[str, Node], cur_leaf: Node) -> Node:
+            father = cur_leaf.father
+            while father:
+                cur_parent = parents.get(father.name, None)
+                if cur_parent:
+                    return cur_parent
+                father = father.father
+
+        self.make_dir(file_name)
+        num_leaves = len(self.leaves_objects)
+        fontsize = min((12 * max((1, round(num_leaves // 10))), 14 * max((1, round(self.msa_length // 10)))))
+        alignment = AlignIO.read(StringIO(self.get_fasta_text()), 'fasta')
+        labels = [record.id for record in alignment]
+
+        rows = dict()
+        for row_name in labels:
+            cur_leaf_row = self.all_nodes.get(row_name)
+            all_parents = gat_all_parents(cur_leaf_row)
+            row = dict()
+            for col_name in labels:
+                if col_name != row_name:
+                    cur_leaf_col = self.all_nodes.get(col_name)
+                    common_parent = gat_common_parent(all_parents, cur_leaf_col)
+                    distance_to_root = common_parent.distance_to_root
+                    distance = cur_leaf_row.distance_to_root + cur_leaf_col.distance_to_root - 2 * distance_to_root
+                else:
+                    distance = 0.0
+                row.update({col_name: distance})
+
+            rows.update({row_name: row})
+
+        df = pd.DataFrame(
+            data=rows,
+        )
+
+        self._save_matrix_heatmap(df, file_name, num_leaves, fontsize, fmt='.4f',
+                                  title='Phylogenetic Distance Matrix\n(Species Pairwise Evolutionary Distances)')
+
+        return file_name
+
+    # Matrix heatmaps (distance / identity) are num_leaves x num_leaves. Up to this many leaves they are drawn as
+    # before: one inch per leaf and the value printed in every cell. Above it, a figure of num_leaves inches and
+    # num_leaves^2 printed values exhausts memory (480 leaves: 230,400 labels, OOM at 16 GB) and exceeds
+    # matplotlib's 2^16-pixel limit, so the values are left out and the figure is scaled to fit.
+    MATRIX_ANNOTATION_MAX_LEAVES = 100
+    MATRIX_LARGE_INCHES_PER_LEAF = 0.15
+    MATRIX_LARGE_MAX_INCHES = 150
+    MATRIX_LARGE_RASTER_PIXELS = 8000
+    MATRIX_LARGE_TITLE_FONTSIZE = 28
+
+    @staticmethod
+    def _add_title_above_axes(fig: Any, title: str, fontsize: Union[int, float], pad_points: float = 8) -> None:
+        """Figure title sitting `pad_points` above the highest panel and growing upwards, so it neither covers the
+        plot (at any font size or number of lines) nor floats far above it, as a title at a fixed fraction of a tall
+        figure does (several inches above the heatmap of a 100+ leaf matrix). bbox_inches='tight' makes room."""
+        top = max(ax.get_position().y1 for ax in fig.axes)
+        fig.text(
+            x=0.5,
+            y=top,
+            s=title,
+            fontsize=fontsize,
+            horizontalalignment='center',
+            verticalalignment='bottom',
+            transform=offset_copy(fig.transFigure, fig=fig, y=pad_points, units='points'))
+
+    @classmethod
+    def _save_matrix_heatmap(cls, data: Any, file_name: str, num_leaves: int, fontsize: Union[int, float],
+                             title: str, fmt: str, labels: Optional[List[str]] = None) -> None:
+        tick_labels = {} if labels is None else {'xticklabels': labels, 'yticklabels': labels}
+        if num_leaves <= cls.MATRIX_ANNOTATION_MAX_LEAVES:
+            side, dpi, annotate, rasterized = num_leaves, 300, True, False
+        else:
+            side = min(max(num_leaves * cls.MATRIX_LARGE_INCHES_PER_LEAF, 15), cls.MATRIX_LARGE_MAX_INCHES)
+            # The cells are embedded as one image of at most MATRIX_LARGE_RASTER_PIXELS per side; labels stay vector.
+            dpi = min(300, cls.MATRIX_LARGE_RASTER_PIXELS / side)
+            annotate, rasterized = False, True
+            fontsize = min(fontsize, cls.MATRIX_LARGE_TITLE_FONTSIZE)
+            every_label = labels if labels is not None else True  # seaborn would otherwise skip some names
+            tick_labels = {'xticklabels': every_label, 'yticklabels': every_label}
+
+        fig = plt.figure(figsize=(side, side))
+
+        if rasterized:
+            # One image instead of seaborn's mesh of num_leaves^2 cells (much less memory); names stay vector text.
+            # interpolation='none' lets the SVG embed the num_leaves x num_leaves image as is; rasterizing or
+            # resampling it at the figure's dpi costs GBs.
+            values = np.asarray(data, dtype=np.float64)
+            names = list(labels) if labels is not None else [str(name) for name in getattr(data, 'columns', [])]
+            ax = fig.add_subplot(1, 1, 1)
+            image = ax.imshow(values, cmap='GnBu', aspect='auto', interpolation='none')
+            fig.colorbar(image, ax=ax, fraction=0.03, pad=0.01)
+            label_size = max(2.0, min(10.0, side / num_leaves * 72 * 0.8))
+            ax.set_xticks(np.arange(len(names)))
+            ax.set_xticklabels(names, rotation=90, fontsize=label_size)
+            ax.set_yticks(np.arange(len(names)))
+            ax.set_yticklabels(names, fontsize=label_size)
+        else:
+            sns.heatmap(
+                data,
+                annot=annotate,
+                fmt=fmt,
+                cmap='GnBu',
+                **tick_labels,
+            )
+        cls._add_title_above_axes(fig, title, fontsize)
+
+        # fig.savefig, not plt.savefig: pyplot's version redraws the whole figure on screen after saving, which for
+        # a figure this size needs a multi-GB pixel buffer (4.7 GB vs 0.4 GB for 880 leaves). Same file either way.
+        fig.savefig(
+            file_name,
+            format='svg',
+            dpi=dpi,
+            bbox_inches='tight')
+        plt.close(fig)
+
+    @staticmethod
+    def sequence_identity_matrix(sequences: List[str], missing: Tuple[str, ...] = ('-', '?')) -> np.ndarray:
+        """
+        Pairwise % identity: matches / compared positions * 100, where a match is the same character at a position
+        that is missing in neither sequence, and a position is compared unless it is missing in both (0 if no
+        position is compared). Same definition as the former per-pair Python loop, computed with matrix products.
+        """
+        codes = np.array([np.frombuffer(seq.encode('latin-1'), dtype=np.uint8) for seq in sequences])
+        valid = ~np.isin(codes, np.frombuffer(''.join(missing).encode('latin-1'), dtype=np.uint8))
+        matches = np.zeros((len(sequences), len(sequences)))
+        for character in np.unique(codes[valid]):
+            present = ((codes == character) & valid).astype(np.float64)
+            matches += present @ present.T
+        missing_mask = (~valid).astype(np.float64)
+        compared = codes.shape[1] - missing_mask @ missing_mask.T
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return np.where(compared > 0, matches / compared * 100, 0.0)
+
+    def tree_to_sequence_identity_matrix(self, file_name: str = 'SequenceIdentityMatrix.svg') -> str:
+        self.make_dir(file_name)
+        num_leaves = len(self.leaves_objects)
+        fontsize = min((12 * max((1, round(num_leaves // 10))), 14 * max((1, round(self.msa_length // 10)))))
+        alignment = AlignIO.read(StringIO(self.get_fasta_text()), 'fasta')
+        labels = [record.id for record in alignment]
+
+        matrix = self.sequence_identity_matrix([str(record.seq) for record in alignment])
+
+        self._save_matrix_heatmap(matrix, file_name, num_leaves, fontsize, fmt='.1f', labels=labels,
+                                  title='Sequence Identity Matrix\n(Species Pairwise Similarity Profile)')
+
+        return file_name
+
+    # Width cap for the binary mapping plot. The figure is ~0.14 in per site, and matplotlib refuses images wider
+    # than 2^16 px (the job crashed at ~4,700 sites); well before that the SVG becomes too heavy to open
+    # (1,000 sites: ~35 s and ~33 MB for 63 taxa).
+    BINARY_MAPPING_MAX_SITES = 1000
+    # Height cap: half an inch per leaf, kept under matplotlib's 2^16-pixel limit at the figure's dpi.
+    BINARY_MAPPING_DPI = 100
+    BINARY_MAPPING_MAX_HEIGHT_INCHES = 0.95 * (1 << 16) / BINARY_MAPPING_DPI
+
+    def get_binary_mapping_note(self) -> str:
+        """Empty string, or a note saying the binary mapping plot was cut to `BINARY_MAPPING_MAX_SITES` sites
+        and / or drawn in the compact form used above `BINARY_MAPPING_FULL_MAX_LEAVES` leaves."""
+        notes = []
+        if self.msa_length > self.BINARY_MAPPING_MAX_SITES:
+            notes.append(f'Showing sites 1-{self.BINARY_MAPPING_MAX_SITES:,} of {self.msa_length:,}: '
+                         f'cut due to the plot width limit of {self.BINARY_MAPPING_MAX_SITES:,} sites.')
+        num_leaves = len(self.leaves_objects)
+        if num_leaves > self.BINARY_MAPPING_FULL_MAX_LEAVES:
+            notes.append(f'Compact drawing for more than {self.BINARY_MAPPING_FULL_MAX_LEAVES:,} genomes '
+                         f'({num_leaves:,} here): cells are coloured by state, without the character in each cell '
+                         f'or the consensus / count rows.')
+
+        return ' '.join(notes)
+
+    def get_matrix_note(self) -> str:
+        """Empty string, or a note saying the matrix plots do not print the value in each cell (too many leaves)."""
+        num_leaves = len(self.leaves_objects)
+        if num_leaves <= self.MATRIX_ANNOTATION_MAX_LEAVES:
+            return ''
+
+        return (f'Values are not printed in the cells for more than {self.MATRIX_ANNOTATION_MAX_LEAVES:,} genomes '
+                f'({num_leaves:,} here): the colour scale shows the values.')
+
+    # Above this many leaves the binary mapping is drawn as one image (see _save_large_binary_mapping) instead of
+    # MsaViz's rectangle + character per cell: 880 leaves x 282 sites took ~6 GB locally and >16 GB on the cluster.
+    BINARY_MAPPING_FULL_MAX_LEAVES = 100
+    BINARY_MAPPING_COLORS = {'0': 'snow', '1': 'salmon', '-': 'silver', '?': 'silver'}
+
+    def tree_to_binary_mapping(self, file_name: str = 'BinaryMapping.svg') -> str:
+        self.make_dir(file_name)
+        num_leaves = len(self.leaves_objects)
+        shown_sites = min(self.msa_length, self.BINARY_MAPPING_MAX_SITES)
+        fontsize = min((12 * max((1, round(num_leaves // 10))), 14 * max((1, round(shown_sites // 10)))))
+        title = 'Mapping of Binary Character Evolution'
+
+        if num_leaves > self.BINARY_MAPPING_FULL_MAX_LEAVES:
+            alignment = AlignIO.read(StringIO(self.get_fasta_text()), 'fasta')
+            self._save_large_binary_mapping([record.id for record in alignment],
+                                            [str(record.seq)[:shown_sites] for record in alignment],
+                                            file_name, min(fontsize, self.MATRIX_LARGE_TITLE_FONTSIZE), title)
+            return file_name
+
+        mv = MsaViz(
+            AlignIO.read(StringIO(self.get_fasta_text()), 'fasta'),
+            end=shown_sites,
+            wrap_length=None,
+            show_label=True,
+            show_seq_char=True,
+            show_grid=True,
+            show_consensus=True,
+            show_count=True
+        )
+
+        mv.set_custom_color_scheme(self.BINARY_MAPPING_COLORS)
+
+        fig = mv.plotfig(dpi=self.BINARY_MAPPING_DPI)
+        # Height grows by half an inch per leaf; keep it under matplotlib's 2^16-pixel limit (at the figure's own
+        # dpi) so trees with several hundred leaves do not crash. Smaller trees keep the original size.
+        fig.set_size_inches(shown_sites / 3, min(num_leaves / 2, self.BINARY_MAPPING_MAX_HEIGHT_INCHES))
+        self._add_title_above_axes(fig, title, fontsize)
+        fig.savefig(  # not plt.savefig: see _save_matrix_heatmap
+            file_name,
+            format='svg',
+            dpi=300,
+            bbox_inches='tight')
+        plt.close(fig)
+
+        return file_name
+
+    @classmethod
+    def _save_large_binary_mapping(cls, labels: List[str], sequences: List[str], file_name: str,
+                                   fontsize: Union[int, float], title: str) -> None:
+        """Binary mapping for many leaves: the cells are one embedded image (colours as in the MsaViz version,
+        no character per cell, no consensus / count rows); leaf names and site numbers stay vector text."""
+        num_leaves, num_sites = len(sequences), len(sequences[0]) if sequences else 0
+        codes = np.array([np.frombuffer(seq.encode('latin-1'), dtype=np.uint8) for seq in sequences])
+        colours = {'0': 0, '1': 1, '-': 2, '?': 2}
+        cells = np.full(codes.shape, 2, dtype=np.uint8)  # anything else is shown like missing data
+        for character, index in colours.items():
+            cells[codes == ord(character)] = index
+        cmap = ListedColormap([cls.BINARY_MAPPING_COLORS['0'], cls.BINARY_MAPPING_COLORS['1'],
+                               cls.BINARY_MAPPING_COLORS['-']])
+
+        width = min(max(num_sites * cls.MATRIX_LARGE_INCHES_PER_LEAF, 15), cls.MATRIX_LARGE_MAX_INCHES)
+        height = min(max(num_leaves * cls.MATRIX_LARGE_INCHES_PER_LEAF, 15), cls.MATRIX_LARGE_MAX_INCHES)
+        dpi = min(300, cls.MATRIX_LARGE_RASTER_PIXELS / max(width, height))
+        fig, ax = plt.subplots(figsize=(width, height))
+        ax.imshow(cells, cmap=cmap, vmin=0, vmax=2, aspect='auto', interpolation='none')  # embedded as is
+        ax.set_yticks(np.arange(num_leaves))
+        ax.set_yticklabels(labels, fontsize=max(2.0, min(10.0, height / num_leaves * 72 * 0.8)))
+        site_step = max(1, int(np.ceil(num_sites / 50)))
+        ax.set_xticks(np.arange(0, num_sites, site_step))
+        ax.set_xticklabels([str(i + 1) for i in range(0, num_sites, site_step)], fontsize=8)
+        ax.set_xlabel('Site')
+        ax.legend(handles=[Patch(facecolor=cls.BINARY_MAPPING_COLORS['0'], edgecolor='gray', label='0'),
+                           Patch(facecolor=cls.BINARY_MAPPING_COLORS['1'], edgecolor='gray', label='1'),
+                           Patch(facecolor=cls.BINARY_MAPPING_COLORS['-'], edgecolor='gray', label='missing')],
+                  loc='upper left', bbox_to_anchor=(1.01, 1), fontsize=10)
+        ax.set_title(title, fontsize=fontsize)
+        fig.savefig(file_name, format='svg', dpi=dpi, bbox_inches='tight')
+        plt.close(fig)
 
     def probability_to_tsv(self, file_name: str = 'BranchPositionProbabilities.tsv', sep: str = '\t',
                            taking_into_coefficient: bool = True) -> str:
@@ -805,10 +1159,12 @@ class Tree:
         return file_name
 
     def build_site_event_matrix(self) -> np.ndarray:
-        """Return (msa_length, 2 * n_nodes) a matrix whose row for a site is the concatenation,
+        """
+        Return (msa_length, 2 * n_nodes) a matrix whose row for a site is the concatenation,
         over every non-root node, of [loss_probability, gain_probability] -- the exact per-site
         vector ``identify_event_candidates`` builds. Also returns the ordered node list (the root
-        is excluded: it has no incoming branch, hence no gain/loss probability)."""
+        is excluded: it has no incoming branch, hence no gain/loss probability).
+        """
         nodes_list = self.all_nodes_objects[1:]
         loss = np.asarray([n.probability_vector_loss for n in nodes_list], dtype='float64')
         gain = np.asarray([n.probability_vector_gain for n in nodes_list], dtype='float64')
@@ -820,7 +1176,8 @@ class Tree:
 
     def identify_event_candidates(self, event_threshold: Union[np.float64, float] = 0.5
                                   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Extracts gain/loss matrices, filters candidate sites, and categorizes evolutionary rates.
+        """
+        Extracts gain/loss matrices, filters candidate sites, and categorizes evolutionary rates.
 
         Args:
             event_threshold: The minimum probability threshold to consider a site as an event.
@@ -838,17 +1195,6 @@ class Tree:
 
         return site_matrix, candidates, categories
 
-    def get_bins(self, site_matrix: np.ndarray, candidates: np.ndarray, categories: np.ndarray
-                 ) -> Tuple[ndarray[Any, dtype[Any]], ndarray[Any, Any], List[Tuple[Union[Union[ndarray[Any, Any],
-                            ndarray[Any, dtype[Any]], ndarray[Any, dtype[void]]], Any], ...]]]:
-        correlations = self.get_row_correlations(site_matrix[candidates])
-        i_idx, j_idx = np.triu_indices(len(candidates), k=1)
-        pairs = np.column_stack((candidates[i_idx], candidates[j_idx]))
-        r_values = correlations[i_idx, j_idx]
-        bins = [tuple(sorted((categories[a], categories[b]))) for a, b in pairs]
-
-        return pairs, r_values, bins
-
     def simulate_datasets(self, file_path: str = '',
                           sep: str = '\t',
                           number_datasets: int = 100,
@@ -861,24 +1207,50 @@ class Tree:
                           use_plot_distribution_of_correlation_file: bool = False,
                           use_plot_correlation_by_rate_bin_file: bool = False) -> Dict[str, str]:
         """
-        Args (new/notable):
-            event_threshold: the actual per-site candidate filter used for the coevolution table.
-            p_value_mode: 'empirical' (default, rank-based against the raw per-bin null --
-                resolution floored at 1/(n_in_bin + 1)) or 'beta' (fit a Beta(a, b) to each bin's
-                null and read the tail off the fitted CDF, removing that floor; bins that don't
-                fit/pass goodness-of-fit fall back to 'empirical' automatically -- see
-                ``fit_beta_null``).
+        Simulates multiple datasets to perform evolutionary analysis and build null distributions.
+
+        Memory does not grow with the number of site pairs (see ``gloome.tree.pairs``): correlations
+        are computed in BLAS blocks, the simulated null is kept exactly while it is small (results
+        identical to an unbounded null) and as fixed-size per-rate-bin histograms of r (resolution
+        ~1e-6 for 4 rate categories, p-values conservative by at most one cell) once it is large. When the
+        observed pairs exceed ``pairs.PAIRS_IN_MEMORY_LIMIT`` they are streamed in two passes and
+        Coevolution.tsv keeps the ``pairs.MAX_TABLE_ROWS`` most significant pairs; q-values are
+        still computed over all pairs.
+
+        Args:
+            file_path: Target directory path where output files and plots will be created.
+            sep: Delimiter character used to save the coevolution table (e.g., '\t' for TSV).
+            number_datasets: Total number of iterations/MSA datasets to simulate.
+            event_threshold: The actual per-site candidate filter used for the coevolution table.
+            p_value_mode: 'empirical' (default, rank-based against the per-bin null -- resolution
+                floored at 1/(n_in_bin + 1)) or 'beta' (fit a Beta(a, b) to each bin's null and read
+                the tail off the fitted CDF, removing that floor; bins that don't fit/pass
+                goodness-of-fit fall back to 'empirical' automatically -- see ``fit_beta_null``).
+            min_fit: Minimum number of data points required in a bin to attempt fitting a Beta distribution.
+            use_simulated_datasets_file: If True, writes the generated MSA datasets into
+                '{file_path}/SimulatedDatasets.fastas'.
+            use_coevolution_file: If True, calculates statistics (p-values, q-values, directions)
+                and saves the table into '{file_path}/Coevolution.tsv'.
+            use_barplot_of_correlation_file: If True, writes '{file_path}/BarplotOfCorrelation.svg'.
+            use_plot_distribution_of_correlation_file: If True, writes '{file_path}/DistributionOfCorrelation.svg'.
+            use_plot_correlation_by_rate_bin_file: If True, writes '{file_path}/CorrelationByRateBin.svg'.
+
+        Returns:
+            Dict[str, str]: A dictionary containing paths to the generated files.
+                Possible keys include:
+                - 'Simulated datasets (fastas)': Path to SimulatedDatasets.fastas
+                - 'Table of coevolution (tsv)': Path to Coevolution.tsv
+                - 'Plot of distribution of correlation (svg)': Path to DistributionOfCorrelation.svg
+                - 'Barplot of correlation (svg)': Path to BarplotOfCorrelation.svg
+                - 'Plot of correlation by rate-bin (svg)': Path to CorrelationByRateBin.svg
         """
         self.make_dir(file_path)
         if self.posterior_rates is None:
             self.set_posterior_rates_vector()
 
         result = {}
+        self.coevolution_notes = {}
         file_simulated_datasets = f'{file_path}/SimulatedDatasets.fastas'
-        file_coevolution = f'{file_path}/Coevolution.tsv'
-        file_distribution_of_correlation = f'{file_path}/DistributionOfCorrelation.svg'
-        file_barplot_of_correlation = f'{file_path}/BarplotOfCorrelation.svg'
-        file_correlation_by_rate_bin = f'{file_path}/CorrelationByRateBin.svg'
 
         site_rate = np.asarray(self.posterior_rates, dtype=np.float64)
         branch_length = np.asarray([n.distance_to_father for n in self.all_nodes_objects[1:]], dtype=np.float64)
@@ -893,17 +1265,27 @@ class Tree:
 
         newick_text = self.get_newick(with_internal_nodes=True)
 
-        null_pool, pairs, r_values, bins = {}, None, None, None
-
-        if any((use_coevolution_file, use_barplot_of_correlation_file, use_plot_distribution_of_correlation_file,
-                use_plot_correlation_by_rate_bin_file)):
+        use_analysis = any((use_coevolution_file, use_barplot_of_correlation_file,
+                            use_plot_distribution_of_correlation_file, use_plot_correlation_by_rate_bin_file))
+        categories_quantity = len(self.rate_vector)
+        observed, null = None, None
+        if use_analysis:
             site_matrix, candidates, categories = self.identify_event_candidates(event_threshold)
-            pairs, r_values, bins = self.get_bins(site_matrix, candidates, categories)
-
-            null_pool = {current_bin: [] for current_bin in set(bins)}
+            centered, norms = pairs.centered_rows(site_matrix[candidates])
+            del site_matrix
+            observed = {'candidates': candidates, 'categories': categories[candidates],
+                        'centered': centered, 'norms': norms}
+            total_pairs = len(candidates) * (len(candidates) - 1) // 2
+            observed['in_memory'] = total_pairs <= pairs.PAIRS_IN_MEMORY_LIMIT
+            observed['total_pairs'] = total_pairs
+            null = pairs.NullDistribution(categories_quantity,
+                                          exact_limit=pairs.EXACT_NULL_LIMIT if observed['in_memory'] else 0)
 
         phylo_tree = Tree(newick_text, categories_quantity=self.categories_quantity, alpha=self.alpha,
                           pi_1=self.pi_1, coefficient_bl=self.coefficient_bl)
+
+        if use_simulated_datasets_file:
+            open(file_simulated_datasets, 'w', encoding='utf-8').close()
 
         for i in range(number_datasets):
             header = f'iterations = {i}'
@@ -919,168 +1301,298 @@ class Tree:
             phylo_tree.calculate_tree()
             phylo_tree.set_posterior_rates_vector()
 
-            if any((use_coevolution_file, use_barplot_of_correlation_file, use_plot_distribution_of_correlation_file,
-                    use_plot_correlation_by_rate_bin_file)):
+            if use_analysis:
                 current_site_matrix, current_candidates, current_categories = (
                     phylo_tree.identify_event_candidates(event_threshold))
-                current_pairs, current_r_values, current_bins = phylo_tree.get_bins(current_site_matrix,
-                                                                                    current_candidates,
-                                                                                    current_categories)
-                for current_bin, r_value in zip(current_bins, current_r_values):
-                    null_pool.setdefault(current_bin, []).append(r_value)
+                current_centered, current_norms = pairs.centered_rows(current_site_matrix[current_candidates])
+                del current_site_matrix
+                for code, r_values in pairs.iter_bin_blocks(current_centered, current_norms,
+                                                            current_categories[current_candidates],
+                                                            categories_quantity):
+                    null.add(code, r_values)
+                del current_centered, current_norms
 
             if use_simulated_datasets_file:
-                current_content = f'{header}\n\n{current_msa}\n\n\n'
                 with open(file_simulated_datasets, 'a', encoding='utf-8') as file:
-                    file.write(current_content)
+                    file.write(f'{header}\n\n{current_msa}\n\n\n')
 
         if use_simulated_datasets_file:
             result.update({'Simulated datasets (fastas)': file_simulated_datasets})
 
-        if any((use_coevolution_file, use_barplot_of_correlation_file, use_plot_distribution_of_correlation_file,
-                use_plot_correlation_by_rate_bin_file)):
-            pos1_list = []
-            pos2_list = []
-            rate_bin_list = []
-            r_list = []
-            p_value_list = []
-            direction_list = []
+        del phylo_tree  # its per-node likelihood vectors are no longer needed
+        gc.collect()
 
-            abs_null_by_bin = {k: np.abs(np.asarray(v, dtype=float)) for k, v in null_pool.items()}
-            beta_by_bin: Dict[Any, Optional[Tuple[float, float]]] = {}
-            pooled_beta = None
-            if p_value_mode == 'beta' and abs_null_by_bin:
-                pooled_signed = np.concatenate([np.asarray(v, dtype=float) for v in null_pool.values() if v])
-                pooled_beta = self.fit_beta_null(pooled_signed, min_fit=min_fit) if pooled_signed.size else None
+        if use_analysis:
+            if observed['in_memory']:
+                table, sample_r, sample_codes = self._coevolution_table_in_memory(observed, null, p_value_mode,
+                                                                                  min_fit, categories_quantity)
+            else:
+                table, sample_r, sample_codes = self._coevolution_table_streamed(observed, null, p_value_mode,
+                                                                                 min_fit, categories_quantity)
+            total_pairs = observed['total_pairs']
+            del observed, null
+            gc.collect()
 
-            for current_pair, current_r_value, current_bin in zip(pairs, r_values, bins):
-                params = None
-                if p_value_mode == 'beta':
-                    if current_bin not in beta_by_bin:
-                        beta_by_bin[current_bin] = self.fit_beta_null(
-                            np.asarray(null_pool.get(current_bin, []), dtype=float), min_fit=min_fit)
-                    params = beta_by_bin[current_bin] or pooled_beta
+            table_rows, sample_size = len(table), int(np.asarray(sample_r).size)
+            outputs = self._coevolution_outputs(file_path, sep, table, sample_r, sample_codes, categories_quantity,
+                                                use_coevolution_file,
+                                                use_barplot_of_correlation_file,
+                                                use_plot_distribution_of_correlation_file,
+                                                use_plot_correlation_by_rate_bin_file)
+            result.update(outputs)
+            self.coevolution_notes = self._coevolution_notes(outputs, total_pairs, table_rows, sample_size)
+
+        return result
+
+    @staticmethod
+    def _coevolution_notes(outputs: Dict[str, str], total_pairs: int, table_rows: int, sample_size: int
+                           ) -> Dict[str, str]:
+        """Notes for the coevolution outputs that do not show every site pair: Coevolution.tsv keeps the
+        pairs.MAX_TABLE_ROWS most significant pairs, the plots draw a random sample of pairs."""
+        notes = {}
+        if 'Table of coevolution (tsv)' in outputs and table_rows < total_pairs:
+            notes['Table of coevolution (tsv)'] = (
+                f'Showing the {table_rows:,} most significant pairs (lowest q-value) out of {total_pairs:,}: cut due '
+                f'to the table size limit of {pairs.MAX_TABLE_ROWS:,} rows. The q-values are computed over all pairs.')
+        if sample_size < total_pairs:
+            for key in ('Plot of distribution of correlation (svg)', 'Barplot of correlation (svg)'):
+                if key in outputs:
+                    notes[key] = (f'Drawn from a random sample of {sample_size:,} of {total_pairs:,} pairs: sampled '
+                                  f'due to the plot size limit of {pairs.PLOT_SAMPLE:,} pairs (the Alpha / Beta fit '
+                                  f'uses the same sample).')
+        shown_points = min(sample_size, pairs.STRIPPLOT_SAMPLE)
+        if 'Plot of correlation by rate-bin (svg)' in outputs and shown_points < total_pairs:
+            notes['Plot of correlation by rate-bin (svg)'] = (
+                f'Showing a random sample of {shown_points:,} of {total_pairs:,} pairs: sampled due to the plot '
+                f'point limit of {pairs.STRIPPLOT_SAMPLE:,} points.')
+
+        return notes
+
+    def _null_beta_params(self, null: 'pairs.NullDistribution', codes_present: np.ndarray, min_fit: int
+                          ) -> Dict[int, Optional[Tuple[float, float]]]:
+        """Per-code Beta fit, falling back to the fit pooled over every code (None: use empirical)."""
+        if null.exact:
+            samples = null.samples()
+            pooled_values = [v for v in samples.values() if v.size]
+            pooled = self.fit_beta_null(np.concatenate(pooled_values), min_fit=min_fit) if pooled_values else None
+            return {int(c): self.fit_beta_null(samples.get(int(c), np.zeros(0)), min_fit=min_fit) or pooled
+                    for c in codes_present}
+        pooled = null.fit_beta(None, min_fit=min_fit) if null.size else None
+
+        return {int(c): null.fit_beta(int(c), min_fit=min_fit) or pooled for c in codes_present}
+
+    def _coevolution_table_in_memory(self, observed: Dict[str, Any], null: 'pairs.NullDistribution',
+                                     p_value_mode: str, min_fit: int, categories_quantity: int
+                                     ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        chunks = list(pairs.iter_upper_pairs(observed['centered'], observed['norms']))
+        i_idx = np.concatenate([c[0] for c in chunks]) if chunks else np.zeros(0, dtype=np.int64)
+        j_idx = np.concatenate([c[1] for c in chunks]) if chunks else np.zeros(0, dtype=np.int64)
+        r_values = np.concatenate([c[2] for c in chunks]) if chunks else np.zeros(0)
+        del chunks
+        codes = pairs.pair_codes(observed['categories'][i_idx], observed['categories'][j_idx], categories_quantity)
+        abs_r = np.abs(r_values)
+        codes_present = np.unique(codes)
+
+        beta_params = (self._null_beta_params(null, codes_present, min_fit) if p_value_mode == 'beta'
+                       else {int(c): None for c in codes_present})
+        p_values = np.ones(r_values.size, dtype=np.float64)
+        if null.exact:
+            samples = null.samples()
+            for code in codes_present:
+                mask = codes == code
+                params = beta_params[int(code)]
+                p_values[mask] = (pairs.beta_tail(abs_r[mask], params) if params is not None else
+                                  pairs.empirical_p_exact(abs_r[mask], samples.get(int(code))))
+        else:
+            p_table = null.empirical_p_table()
+            h_idx = pairs.abs_index(r_values, null.hist_bins)
+            for code in codes_present:
+                mask = codes == code
+                params = beta_params[int(code)]
+                p_values[mask] = (pairs.beta_tail(abs_r[mask], params) if params is not None else
+                                  p_table[code, h_idx[mask]])
+            del p_table, h_idx
+
+        q_values = self.benjamini_hochberg(p_values) if p_values.size else p_values
+        candidates = observed['candidates']
+        table = self._coevolution_frame(candidates[i_idx], candidates[j_idx], r_values, codes, p_values, q_values,
+                                        categories_quantity)
+        sample = (np.random.default_rng(0).choice(r_values.size, pairs.PLOT_SAMPLE, replace=False)
+                  if r_values.size > pairs.PLOT_SAMPLE else slice(None))
+
+        return table, r_values[sample], codes[sample]
+
+    def _coevolution_table_streamed(self, observed: Dict[str, Any], null: 'pairs.NullDistribution',
+                                    p_value_mode: str, min_fit: int, categories_quantity: int
+                                    ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        """
+        Two passes over the observed pairs. Every p-value is a function of the key
+        (rate-bin code, |r| histogram cell), so pass 1 only counts pairs per key; BH q-values are
+        computed exactly over all pairs from those counts; pass 2 keeps the most significant
+        ``pairs.MAX_TABLE_ROWS`` pairs.
+        """
+        hist_bins = null.hist_bins
+        n_codes = categories_quantity * categories_quantity
+        cats, total_pairs = observed['categories'], observed['total_pairs']
+        rng = np.random.default_rng(0)
+        keep_probability = min(1.0, pairs.PLOT_SAMPLE / max(1, total_pairs))
+
+        key_counts = np.zeros(n_codes * hist_bins, dtype=np.int64)
+        sample_r, sample_codes = [], []
+        for i_idx, j_idx, r_values in pairs.iter_upper_pairs(observed['centered'], observed['norms']):
+            codes = pairs.pair_codes(cats[i_idx], cats[j_idx], categories_quantity)
+            key_counts += np.bincount(codes.astype(np.int64) * hist_bins + pairs.abs_index(r_values, hist_bins),
+                                      minlength=n_codes * hist_bins)
+            keep = rng.random(r_values.size) < keep_probability
+            sample_r.append(r_values[keep])
+            sample_codes.append(codes[keep])
+
+        p_key = null.empirical_p_table()
+        if p_value_mode == 'beta':
+            codes_present = np.flatnonzero(key_counts.reshape(n_codes, hist_bins).sum(axis=1))
+            edges = np.arange(hist_bins) / hist_bins
+            for code, params in self._null_beta_params(null, codes_present, min_fit).items():
                 if params is not None:
-                    current_p_value = self.beta_p(current_r_value, params)
-                else:
-                    abs_null = abs_null_by_bin.get(current_bin, np.zeros(0))
-                    n_bin = abs_null.size
-                    current_p_value = ((1 + int(np.count_nonzero(abs_null >= abs(current_r_value)))) / (1 + n_bin)
-                                       if n_bin else 1.0)
-                pos1_list.append(current_pair[0])
-                pos2_list.append(current_pair[1])
-                r_list.append(current_r_value)
-                rate_bin_list.append(current_bin)
-                p_value_list.append(current_p_value)
-                direction_list.append('co-occurrence' if current_r_value >= 0 else 'avoidance')
+                    p_key[code] = pairs.beta_tail(edges, params)
+        p_key = p_key.ravel()
 
-            p_values = np.asarray(p_value_list)
-            q_values = self.benjamini_hochberg(p_values)
-            df = pd.DataFrame({'POS1': np.asarray(pos1_list, np.int32),
-                               'POS2': np.asarray(pos2_list, np.int32),
-                               'r': np.round(np.asarray(r_list), decimals=14),
-                               'rate-bin': rate_bin_list,
-                               'p-value': np.round(p_values, decimals=14),
-                               'q-value': np.round(q_values, decimals=14),
-                               'direction': direction_list})
-            df.sort_values(by=['q-value', 'p-value', 'r'], key=lambda x: x.abs() if x.name == 'r' else x, inplace=True,
-                           ascending=[True, True, False])
+        used = np.flatnonzero(key_counts)
+        q_key = np.ones(p_key.size)
+        q_key[used] = pairs.benjamini_hochberg_weighted(p_key[used], key_counts[used])
 
-            del pos1_list, pos2_list, rate_bin_list, r_list, p_value_list, direction_list
-            gc.collect()
+        key_state = np.zeros(p_key.size, dtype=np.int8)
+        need = 0
+        if total_pairs <= pairs.MAX_TABLE_ROWS:
+            key_state[used] = 1
+        else:
+            order = np.lexsort((-(used % hist_bins), p_key[used], q_key[used]))
+            cumulative = np.cumsum(key_counts[used][order])
+            boundary = int(np.searchsorted(cumulative, pairs.MAX_TABLE_ROWS))
+            key_state[used[order[:boundary]]] = 1
+            key_state[used[order[boundary]]] = 2
+            need = pairs.MAX_TABLE_ROWS - (int(cumulative[boundary - 1]) if boundary else 0)
 
-            r_data = df['r'].dropna().to_numpy()
-            np.clip(r_data, -1 + eps2, 1 - eps2, out=r_data)
-            alpha_est, beta_est, loc_est, scale_est = sp_beta.fit(r_data, floc=-1, fscale=2)
+        kept = {'i': [], 'j': [], 'r': [], 'key': []}
+        edge = {'i': [], 'j': [], 'r': [], 'key': []}
+        for i_idx, j_idx, r_values in pairs.iter_upper_pairs(observed['centered'], observed['norms']):
+            codes = pairs.pair_codes(cats[i_idx], cats[j_idx], categories_quantity)
+            keys = codes.astype(np.int64) * hist_bins + pairs.abs_index(r_values, hist_bins)
+            state = key_state[keys]
+            for target, mask in ((kept, state == 1), (edge, state == 2)):
+                if mask.any():
+                    target['i'].append(i_idx[mask].astype(np.int32))
+                    target['j'].append(j_idx[mask].astype(np.int32))
+                    target['r'].append(r_values[mask])
+                    target['key'].append(keys[mask])
+
+        def joined(store: Dict[str, List[np.ndarray]], name: str, dtype_: Any) -> np.ndarray:
+            return np.concatenate(store[name]) if store[name] else np.zeros(0, dtype=dtype_)
+
+        columns = {name: np.concatenate((joined(kept, name, dtype_), joined(edge, name, dtype_)[
+            np.argsort(-np.abs(joined(edge, 'r', float)), kind='stable')[:need]]))
+            for name, dtype_ in (('i', np.int32), ('j', np.int32), ('r', float), ('key', np.int64))}
+
+        candidates = observed['candidates']
+        table = self._coevolution_frame(candidates[columns['i']], candidates[columns['j']], columns['r'],
+                                        columns['key'] // hist_bins, p_key[columns['key']], q_key[columns['key']],
+                                        categories_quantity)
+
+        return table, np.concatenate(sample_r), np.concatenate(sample_codes)
+
+    @staticmethod
+    def _coevolution_frame(pos1: np.ndarray, pos2: np.ndarray, r_values: np.ndarray, codes: np.ndarray,
+                           p_values: np.ndarray, q_values: np.ndarray, categories_quantity: int) -> pd.DataFrame:
+        codes_present, code_index = np.unique(codes, return_inverse=True)
+        labels = [str(pairs.code_label(c, categories_quantity)) for c in codes_present]
+        df = pd.DataFrame({'POS1': np.asarray(pos1, np.int32),
+                           'POS2': np.asarray(pos2, np.int32),
+                           'r': np.round(np.asarray(r_values, dtype=np.float64), decimals=14),
+                           'rate-bin': pd.Categorical.from_codes(code_index.astype(np.int32), categories=labels),
+                           'p-value': np.round(p_values, decimals=14),
+                           'q-value': np.round(q_values, decimals=14),
+                           'direction': pd.Categorical.from_codes((np.asarray(r_values) < 0).astype(np.int8),
+                                                                  categories=['co-occurrence', 'avoidance'])})
+        df.sort_values(by=['q-value', 'p-value', 'r'], key=lambda x: x.abs() if x.name == 'r' else x, inplace=True,
+                       ascending=[True, True, False])
+
+        return df
+
+    @staticmethod
+    def _coevolution_outputs(file_path: str, sep: str, table: pd.DataFrame, sample_r: np.ndarray,
+                             sample_codes: np.ndarray, categories_quantity: int, use_coevolution_file: bool,
+                             use_barplot_of_correlation_file: bool, use_plot_distribution_of_correlation_file: bool,
+                             use_plot_correlation_by_rate_bin_file: bool) -> Dict[str, str]:
+        """Writes Coevolution.tsv and the plots. Plots and the descriptive Beta fit use at most
+        pairs.PLOT_SAMPLE observed correlations (all of them for smaller inputs)."""
+        result = {}
+        file_coevolution = f'{file_path}/Coevolution.tsv'
+        file_distribution_of_correlation = f'{file_path}/DistributionOfCorrelation.svg'
+        file_barplot_of_correlation = f'{file_path}/BarplotOfCorrelation.svg'
+        file_correlation_by_rate_bin = f'{file_path}/CorrelationByRateBin.svg'
+
+        if use_coevolution_file:
+            table.to_csv(file_coevolution, sep=sep, index=False, float_format='%.8f', chunksize=50000)
+            result.update({'Table of coevolution (tsv)': file_coevolution})
+        del table
+        gc.collect()
+
+        r_data = np.clip(np.round(np.asarray(sample_r, dtype=np.float64), decimals=14), -1 + eps2, 1 - eps2)
+        if r_data.size > 1:
+            alpha_est, beta_est, _, _ = sp_beta.fit(r_data, floc=-1, fscale=2)
             info_text = f'Alpha: {alpha_est:.4f}\nBeta: {beta_est:.4f}'
+        else:
+            info_text = 'Alpha: n/a\nBeta: n/a'
+        r_series = pd.Series(np.round(np.asarray(sample_r, dtype=np.float64), decimals=14), name='r')
 
-            del r_data
-            gc.collect()
+        if use_plot_distribution_of_correlation_file:
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.tick_params(axis='both', labelsize=8)
+            if r_series.size > 1:
+                sns.kdeplot(r_series, fill=True, color='blue', ax=ax)
+            ax.set_xlim(-1, 1)
+            ax.set_xlabel('Correlation (r)')
+            ax.set_ylabel('Density')
+            ax.set_title('Distribution of original correlation coefficients')
+            ax.text(0.05, 0.95, info_text, transform=ax.transAxes, fontsize=9, verticalalignment='top',
+                    bbox={'boxstyle': 'round,pad=0.5', 'facecolor': 'white', 'alpha': 0.6, 'edgecolor': 'gray'})
+            fig.savefig(file_distribution_of_correlation, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            result.update({'Plot of distribution of correlation (svg)': file_distribution_of_correlation})
 
-            if use_coevolution_file:
-                df.to_csv(file_coevolution, sep=sep, index=False, float_format='%.8f', chunksize=50000)
-                result.update({'Table of coevolution (tsv)': file_coevolution})
+        if use_barplot_of_correlation_file:
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.tick_params(axis='both', labelsize=8)
+            sns.histplot(r_series, bins=20, kde=r_series.size > 1, color='green', ax=ax)
+            ax.set_xlim(-1, 1)
+            ax.set_xlabel('Correlation (r)')
+            ax.set_ylabel('Count')
+            ax.set_title('Barplot of original correlation coefficients')
+            ax.text(0.05, 0.95, info_text, transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                    bbox={'boxstyle': 'round,pad=0.5', 'facecolor': 'white', 'alpha': 0.6, 'edgecolor': 'gray'})
+            fig.savefig(file_barplot_of_correlation, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            result.update({'Barplot of correlation (svg)': file_barplot_of_correlation})
 
-            if use_plot_distribution_of_correlation_file:
-                fig, ax = plt.subplots(figsize=(7, 5))
-                ax.tick_params(axis='both', labelsize=8)
-                sns.kdeplot(df['r'], fill=True, color='blue', ax=ax)
-                ax.set_xlim(-1, 1)
-                ax.set_xlabel('Correlation (r)')
-                ax.set_ylabel('Density')
-                ax.set_title('Distribution of original correlation coefficients')
-
-                ax.text(0.05, 0.95, info_text,
-                        transform=ax.transAxes,
-                        fontsize=9,
-                        verticalalignment='top',
-                        bbox={'boxstyle': 'round,pad=0.5',
-                              'facecolor': 'white',
-                              'alpha': 0.6,
-                              'edgecolor': 'gray'})
-
-                fig.savefig(file_distribution_of_correlation, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-
-                result.update({'Plot of distribution of correlation (svg)': file_distribution_of_correlation})
-
-            if use_barplot_of_correlation_file:
-                fig, ax = plt.subplots(figsize=(7, 5))
-                ax.tick_params(axis='both', labelsize=8)
-                sns.histplot(df['r'], bins=20, kde=True, color='green', ax=ax)
-                ax.set_xlim(-1, 1)
-                ax.set_xlabel('Correlation (r)')
-                ax.set_ylabel('Count')
-                ax.set_title('Barplot of original correlation coefficients')
-
-                ax.text(0.05, 0.95, info_text,
-                        transform=ax.transAxes,
-                        fontsize=8,
-                        verticalalignment='top',
-                        bbox={'boxstyle': 'round,pad=0.5',
-                              'facecolor': 'white',
-                              'alpha': 0.6,
-                              'edgecolor': 'gray'})
-
-                fig.savefig(file_barplot_of_correlation, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-
-                result.update({'Barplot of correlation (svg)': file_barplot_of_correlation})
-
-            if use_plot_correlation_by_rate_bin_file:
-                def make_clean_label(tup):
-                    if isinstance(tup, tuple) and len(tup) == 2:
-                        return f'({tup[0]:.0f}, {tup[1]:.0f})'
-                    return str(tup)
-
-                df['bin_clean'] = df['rate-bin'].apply(make_clean_label)
-                unique_bins_sorted = sorted(df['rate-bin'].dropna().unique())
-                categories_order = [make_clean_label(b) for b in unique_bins_sorted]
-                bins_quantity = len(unique_bins_sorted)
-
-                fig, ax = plt.subplots(figsize=(max(7, int(np.round(bins_quantity * 0.7))), 5))
-                ax.tick_params(axis='both', labelsize=8)
-
-                sns.stripplot(x='bin_clean',
-                              y='r',
-                              data=df,
-                              order=categories_order,
-                              palette='muted',
-                              hue='bin_clean',
-                              size=6,
-                              jitter=0.15,
-                              alpha=0.7,
-                              ax=ax,
-                              )
-
-                ax.set_xlabel('Rate-bin categories')
-                ax.set_ylabel('Correlation (r)')
-                ax.set_title('Distribution of original correlation coefficients by rate-bin categories')
-
-                fig.savefig(file_correlation_by_rate_bin, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-
-                result.update({'Plot of correlation by rate-bin (svg)': file_correlation_by_rate_bin})
+        if use_plot_correlation_by_rate_bin_file:
+            strip = np.arange(r_series.size)
+            if strip.size > pairs.STRIPPLOT_SAMPLE:
+                strip = np.sort(np.random.default_rng(1).choice(strip, pairs.STRIPPLOT_SAMPLE, replace=False))
+            codes_sorted = np.unique(sample_codes)
+            labels = {int(c): '({:.0f}, {:.0f})'.format(*pairs.code_label(c, categories_quantity))
+                      for c in codes_sorted}
+            strip_df = pd.DataFrame({'bin_clean': [labels[int(c)] for c in np.asarray(sample_codes)[strip]],
+                                     'r': r_series.to_numpy()[strip]})
+            categories_order = [labels[int(c)] for c in codes_sorted]
+            fig, ax = plt.subplots(figsize=(max(7, int(np.round(len(categories_order) * 0.7))), 5))
+            ax.tick_params(axis='both', labelsize=8)
+            sns.stripplot(x='bin_clean', y='r', data=strip_df, order=categories_order, palette='muted',
+                          hue='bin_clean', size=6, jitter=0.15, alpha=0.7, ax=ax)
+            ax.set_xlabel('Rate-bin categories')
+            ax.set_ylabel('Correlation (r)')
+            ax.set_title('Distribution of original correlation coefficients by rate-bin categories')
+            fig.savefig(file_correlation_by_rate_bin, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            result.update({'Plot of correlation by rate-bin (svg)': file_correlation_by_rate_bin})
 
         return result
 
@@ -1101,8 +1613,31 @@ class Tree:
                                    number_lg: Union[float, np.float64, int] = 1) -> str:
 
         self.make_dir(file_name)
-        if self.correlation_vector is None:
+        self.pearson_correlation_note = ''
+        if self.correlation_vector is None and self.correlation_stream is None:
             self.calculate_correlation(probability_lg=probability_lg, number_lg=number_lg)
+
+        if self.correlation_vector is None and self.correlation_stream is not None:
+            sites, centered, norms = self.correlation_stream
+            i_idx, j_idx, r_values, total_pairs = self._strongest_correlations(centered, norms, pairs.MAX_TABLE_ROWS)
+            with open(file_name, 'w', encoding='utf-8', newline='') as file:
+                file.write(f'POS1{sep}POS2{sep}correlation\n')
+                if i_idx is None:  # few enough pairs: stream them all, as before
+                    for i_idx, j_idx, r_values in pairs.iter_upper_pairs(centered, norms):
+                        pd.DataFrame({'POS1': sites[i_idx].astype(np.int32),
+                                      'POS2': sites[j_idx].astype(np.int32),
+                                      'correlation': r_values}
+                                     ).to_csv(file, sep=sep, index=False, header=False, float_format='%.8f')
+                else:
+                    pd.DataFrame({'POS1': sites[i_idx].astype(np.int32),
+                                  'POS2': sites[j_idx].astype(np.int32),
+                                  'correlation': r_values}
+                                 ).to_csv(file, sep=sep, index=False, header=False, float_format='%.8f',
+                                          chunksize=500_000)
+                    self.pearson_correlation_note = (
+                        f'Showing the {r_values.size:,} pairs with the strongest correlation (largest |r|) out of '
+                        f'{total_pairs:,}: cut due to the table size limit of {pairs.MAX_TABLE_ROWS:,} rows.')
+            return file_name
 
         df = pd.DataFrame({'POS1': np.int32(self.correlation_vector[0]),
                            'POS2': np.int32(self.correlation_vector[1]),
@@ -1110,6 +1645,44 @@ class Tree:
         df.to_csv(file_name, sep=sep, index=False, float_format='%.8f', chunksize=50000)
 
         return file_name
+
+    @staticmethod
+    def _strongest_correlations(centered: np.ndarray, norms: np.ndarray, max_rows: int
+                                ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], int]:
+        """
+        The `max_rows` site pairs with the largest |r|, in their original (POS1, POS2) order, found in two passes
+        without holding all pairs: pass 1 builds a histogram of |r|; pass 2 keeps the pairs above the cut-off cell
+        plus the cut-off cell itself, and the strongest of those fill the remaining rows exactly.
+        Returns (None, None, None, total_pairs) when there are no more than `max_rows` pairs.
+        """
+        hist_bins = pairs.MAX_HIST_BINS
+        counts = np.zeros(hist_bins, dtype=np.int64)
+        for _, _, r_values in pairs.iter_upper_pairs(centered, norms):
+            counts += np.bincount(pairs.abs_index(r_values, hist_bins), minlength=hist_bins)
+        total_pairs = int(counts.sum())
+        if total_pairs <= max_rows:
+            return None, None, None, total_pairs
+
+        # Cut-off cell: every pair in a higher cell is kept; some pairs of this cell fill the rest.
+        from_top = np.cumsum(counts[::-1])
+        cutoff = hist_bins - 1 - int(np.searchsorted(from_top, max_rows))
+        need = max_rows - int(counts[cutoff + 1:].sum())
+
+        kept_i, kept_j, kept_r = [], [], []
+        for i_idx, j_idx, r_values in pairs.iter_upper_pairs(centered, norms):
+            mask = pairs.abs_index(r_values, hist_bins) >= cutoff
+            if mask.any():
+                kept_i.append(i_idx[mask].astype(np.int32))
+                kept_j.append(j_idx[mask].astype(np.int32))
+                kept_r.append(r_values[mask])
+        i_idx, j_idx, r_values = np.concatenate(kept_i), np.concatenate(kept_j), np.concatenate(kept_r)
+
+        in_cutoff = np.flatnonzero(pairs.abs_index(r_values, hist_bins) == cutoff)
+        keep = np.ones(r_values.size, dtype=bool)
+        keep[in_cutoff] = False
+        keep[in_cutoff[np.argsort(-np.abs(r_values[in_cutoff]), kind='stable')[:need]]] = True
+
+        return i_idx[keep], j_idx[keep], r_values[keep], total_pairs
 
     def attributes_to_tsv(self, file_name: str = 'TreeAttributes.tsv', sep: str = '\t') -> str:
 
@@ -1184,32 +1757,38 @@ class Tree:
     def tree_to_visual_format(self, file_name: str = 'VisualTree.svg', with_internal_nodes: bool = False,
                               file_extensions: Optional[Union[str, Tuple[str, ...]]] = None, show_axes: bool = False,
                               taking_into_coefficient: bool = True) -> Dict[str, str]:
+
         file_extensions = self.check_file_extensions_tuple(file_extensions, 'svg')
 
-        self.make_dir(file_name)
-        tmp_dir = Path(file_name).parent.joinpath('tmp')
-        tmp_file = f'{tmp_dir.joinpath(f"{self.get_random_name()}.tree")}'
-        self.make_dir(tmp_file)
-        self.tree_to_newick_file(tmp_file, with_internal_nodes, taking_into_coefficient)
-        phylogenetic_tree = Phylo.read(tmp_file, 'newick')
+        base_path = Path(file_name)
+        base_path.parent.mkdir(parents=True, exist_ok=True)
 
-        j = file_name[::-1].find('.')
-        file_names = dict()
+        newick_data = self.get_newick(with_internal_nodes, decimal_length=0,
+                                      taking_into_coefficient=taking_into_coefficient)
+
+        with StringIO(newick_data) as string_buffer:
+            phylo_tree = Phylo.read(string_buffer, 'newick')
+
+        file_names = {}
+        plt_axis_mode = 'on' if show_axes else 'off'
+
         for file_extension in file_extensions:
-            file_name = f'{file_name[:-(j + 1)]}.{file_extension}' if len(file_name) > j > -1 else (f'{file_name}.'
-                                                                                                    f'{file_extension}')
-            file_names.update({f'Newick tree ({file_extension})': file_name})
+            current_file_path = base_path.with_suffix(f'.{file_extension}')
+            file_names[f'Newick tree ({file_extension})'] = str(current_file_path)
+
             if file_extension == 'txt':
-                with open(file_name, 'w') as f:
-                    Phylo.draw_ascii(phylogenetic_tree, f)
+                with open(current_file_path, 'w', encoding='utf-8') as f:
+                    Phylo.draw_ascii(phylo_tree, f)
             else:
-                Phylo.draw(phylogenetic_tree, do_show=False)
-                plt.axis('on' if show_axes else 'off')
-                kwargs = {'format': file_extension, 'bbox_inches': 'tight', 'dpi': 300} if (
-                        file_extension == 'svg') else {'format': file_extension}
-                plt.savefig(file_name, **kwargs)
+                Phylo.draw(phylo_tree, do_show=False)
+                plt.axis(plt_axis_mode)
+
+                kwargs = {'format': file_extension}
+                if file_extension == 'svg':
+                    kwargs.update({'bbox_inches': 'tight', 'dpi': 300})
+
+                plt.savefig(current_file_path, **kwargs)
                 plt.close()
-        rmtree(tmp_dir, ignore_errors=True)
 
         return file_names
 
@@ -1300,7 +1879,7 @@ class Tree:
             if file_extension in ('svg', 'png'):
                 nx.draw(graph, with_labels=True, font_color='Maroon', node_color='Gold', node_size=1000//size_factor,
                         font_size=12//size_factor, font_weight='bold')
-                plt.savefig(file_name, **{'format': file_extension, 'bbox_inches': 'tight', 'dpi': 300})
+                plt.savefig(file_name, format=file_extension, bbox_inches='tight', dpi=300)
                 plt.close()
             if file_extension in ('dot', ):
                 nx.drawing.nx_pydot.write_dot(graph, file_name)
@@ -1344,9 +1923,289 @@ class Tree:
                                                 result_fild='x')
             self.set_vars()
 
+    def get_branch_log_likelihood_gradient(self) -> np.ndarray:
+        """
+        d logL / d t for the branch above every non-root node (in `all_nodes_objects[1:]` order), where
+        t = distance_to_father * coefficient_bl. For each branch, L_site = mean_r sum_ij pi_i down_i P_ij(t r) up_j
+        holds with every other branch fixed, so replacing P with dP/dt gives the derivative. Numerator and
+        denominator use the branch's own (rescaled) up/down vectors, so the scale factors cancel. All branches come
+        from a single up + down pass: run calculate_up() and calculate_down() on the current branch lengths first.
+        """
+        rates = np.asarray(self.rate_vector, dtype=np.float64)
+
+        branch_nodes = self.all_nodes_objects[1:]
+        distances = np.asarray([current_node.distance_to_father for current_node in branch_nodes], dtype=np.float64)
+        branch_lengths = distances[:, np.newaxis] * self.coefficient_bl * rates[np.newaxis, :]
+        d_pmatrices = (rates[np.newaxis, :, np.newaxis, np.newaxis] *
+                       Node.get_two_state_pmatrix_derivative(self.pi_1, branch_lengths))
+
+        gradient = np.empty(len(branch_nodes), dtype=np.float64)
+        for k, (current_node, d_pmatrix) in enumerate(zip(branch_nodes, d_pmatrices)):
+            parent_term = current_node.frequency[np.newaxis, :, np.newaxis] * current_node.down_vector
+            rate_weights = Node.get_rate_weights(current_node.up_log_scale + current_node.down_log_scale)
+            if rate_weights is not None:
+                parent_term = parent_term * rate_weights[:, np.newaxis, :]
+            derivative_per_pattern = np.sum(parent_term * np.matmul(d_pmatrix, current_node.up_vector), axis=(0, 1))
+            likelihood_per_pattern = np.sum(parent_term * np.matmul(current_node.pmatrix, current_node.up_vector),
+                                            axis=(0, 1))
+            likelihood_per_pattern = np.where(likelihood_per_pattern > 0.0, likelihood_per_pattern, eps)
+            gradient[k] = self.pattern_weights @ (derivative_per_pattern / likelihood_per_pattern)
+
+        return gradient
+
+    def optimize_branch_lengths(self, is_optimize_bl_per_branch: Optional[bool] = None, max_iterations: int = 2000,
+                                tolerance: float = 1e-5) -> bool:
+        """
+        Maximum-likelihood length for every branch at once: L-BFGS-B over the branch lengths with the analytic
+        gradient (`get_branch_log_likelihood_gradient`). The lengths themselves are the parameters (not their logs),
+        so branches whose optimum is ~0 settle on the lower bound at once. `coefficient_bl` is folded into the branch
+        lengths and reset to 1, so `distance_to_father` holds the optimized lengths afterwards.
+
+        The model is reversible with a stationary root, so for a bifurcating root only the SUM of the root's two
+        branches is identifiable: they are optimized as one parameter and keep their original ratio.
+
+        Returns:
+            bool: whether L-BFGS-B converged within `max_iterations`.
+        """
+        if not is_optimize_bl_per_branch:
+            return False
+
+        branch_nodes = self.all_nodes_objects[1:]
+        lengths = np.asarray([current_node.distance_to_father for current_node in branch_nodes], dtype=np.float64)
+        lengths = np.clip(lengths * self.coefficient_bl, *self.branch_length_bounds)
+        self.set_coefficient_bl(1.0)
+
+        free = np.ones(len(branch_nodes), dtype=bool)
+        tied = None
+        if len(self.root.children) == 2:
+            tied = tuple(branch_nodes.index(child) for child in self.root.children)
+            share = lengths[tied[0]] / (lengths[tied[0]] + lengths[tied[1]])
+            lengths[tied[0]] += lengths[tied[1]]
+            free[tied[1]] = False
+
+        def negative_log_likelihood(free_lengths: np.ndarray) -> Tuple[float, np.ndarray]:
+            all_lengths = np.empty(len(branch_nodes), dtype=np.float64)
+            all_lengths[free] = free_lengths
+            if tied:
+                root_sum = all_lengths[tied[0]]
+                all_lengths[tied[0]], all_lengths[tied[1]] = root_sum * share, root_sum * (1 - share)
+            for current_node, length in zip(branch_nodes, all_lengths):
+                current_node.distance_to_father = length
+
+            self.set_vars()
+            self.calculate_up()
+            self.calculate_down()
+            gradient = self.get_branch_log_likelihood_gradient()
+            if tied:
+                gradient[tied[0]] = share * gradient[tied[0]] + (1 - share) * gradient[tied[1]]
+
+            return -self.log_likelihood, -gradient[free]
+
+        # Stop when an iteration gains less than `tolerance` log-likelihood units (scipy's ftol is relative to |f|).
+        start_value, _ = negative_log_likelihood(lengths[free])
+        result = minimize(negative_log_likelihood, lengths[free], jac=True, method='L-BFGS-B',
+                          bounds=[self.branch_length_bounds] * int(free.sum()),
+                          options={'maxiter': max_iterations,
+                                   'maxcor': 20,
+                                   'ftol': tolerance / max(abs(start_value), 1.0),
+                                   'gtol': 1e-3})
+        negative_log_likelihood(result.x)
+        self.set_distances_to_root()
+
+        return bool(result.success)
+
+    def get_branch_lengths(self) -> np.ndarray:
+        """Length of the branch above every non-root node (`all_nodes_objects[1:]` order), coefficient included."""
+
+        return np.asarray([current_node.distance_to_father for current_node in self.all_nodes_objects[1:]],
+                          dtype=np.float64) * self.coefficient_bl
+
+    def set_parameters_state(self, branch_lengths: np.ndarray, pi_1: Union[float, np.float64],
+                             alpha: Union[float, np.float64]) -> None:
+        """Set every branch length (coefficient reset to 1), pi_1 and alpha, and rebuild the P-matrices."""
+        for current_node, length in zip(self.all_nodes_objects[1:], branch_lengths):
+            current_node.distance_to_father = length
+        self.clean_all()
+        self.set_all(categories_quantity=self.categories_quantity, alpha=alpha, pi_1=pi_1, coefficient_bl=1.0)
+        self.get_distances_to_leaves()
+        self.set_distances_to_root()
+
+    def optimize_branch_lengths_and_parameters(self, is_optimize_pi: Optional[bool] = None,
+                                               is_optimize_pi_average: Optional[bool] = None,
+                                               is_optimize_alpha: Optional[bool] = None,
+                                               starts_quantity: Optional[int] = None,
+                                               max_rounds: int = branch_length_max_rounds, tolerance: float = 1e-2,
+                                               seed: Optional[int] = None) -> None:
+        """
+        Per-branch lengths with pi_1 / alpha, from several starting points; the best fit is kept. The likelihood
+        over branch lengths has several local optima, so the starts are: the input lengths; the single-coefficient
+        fit (input lengths times the optimized coefficient, with its pi_1 / alpha); and random ones, the
+        single-coefficient lengths each multiplied by exp(N(0, 1)). Random starts are reproducible: `seed`, or 0.
+
+        From each start, branch lengths and pi_1 / alpha are optimized in turn until a round gains less than
+        `tolerance` log-likelihood units, for at most `max_rounds` rounds. (Optimizing pi_1 and alpha inside the
+        same L-BFGS-B run converged worse: they trade off strongly against the branch lengths.)
+
+        `branch_length_starts` records every start: its log-likelihood, rounds, and whether it converged (the gain
+        fell below `tolerance`, or -- without pi_1 / alpha -- L-BFGS-B converged) rather than hitting a cap.
+        `single_coefficient_fit` records the single-coefficient fit (always run, as the nested model of the
+        comparison report, `get_branch_length_models_table`); it is the final model only if the user did not ask for
+        per-branch lengths.
+        """
+        starts_quantity = branch_length_starts_quantity if starts_quantity is None else max(1, int(starts_quantity))
+        optimizes_parameters = bool(is_optimize_pi or is_optimize_pi_average or is_optimize_alpha)
+
+        input_state = (self.get_branch_lengths(), self.pi_1, self.alpha)
+        starts = [('input lengths', input_state)]
+
+        self.optimize_coefficient_bl(True)
+        self.optimize_pi(is_optimize_pi, is_optimize_pi_average)
+        self.optimize_alpha(is_optimize_alpha)
+        if optimizes_parameters:
+            self.optimize_coefficient_bl(True)
+        coefficient_bl = self.coefficient_bl
+        single_state = (input_state[0] * coefficient_bl, self.pi_1, self.alpha)
+        self.set_parameters_state(*single_state)
+        self.single_coefficient_fit = {'log-likelihood': self.get_log_likelihood(), 'pi_1': self.pi_1,
+                                       'alpha': self.alpha, 'coefficient_bl': coefficient_bl,
+                                       'branch_lengths': single_state[0],
+                                       'is_optimize_pi': bool(is_optimize_pi or is_optimize_pi_average),
+                                       'is_optimize_alpha': bool(is_optimize_alpha)}
+
+        if starts_quantity > 1:
+            starts.append(('single coefficient', single_state))
+            random_generator = np.random.default_rng(0 if seed is None else seed)
+            for number in range(1, starts_quantity - 1):
+                lengths = single_state[0] * np.exp(random_generator.standard_normal(len(single_state[0])))
+                starts.append((f'random {number}', (np.clip(lengths, *self.branch_length_bounds), ) + single_state[1:]))
+
+        self.branch_length_starts, best_state = [], None
+        for name, state in starts:
+            self.set_parameters_state(*state)
+            previous_log_likelihood, converged, rounds = None, False, 0
+            for rounds in range(1, max_rounds + 1):
+                converged = self.optimize_branch_lengths(True)
+                if not optimizes_parameters:
+                    break
+
+                self.optimize_pi(is_optimize_pi, is_optimize_pi_average)
+                self.optimize_alpha(is_optimize_alpha)
+                self.set_all(categories_quantity=self.categories_quantity, alpha=self.alpha, pi_1=self.pi_1,
+                             coefficient_bl=self.coefficient_bl)
+                current_log_likelihood = self.get_log_likelihood()
+                converged = (previous_log_likelihood is not None and
+                             current_log_likelihood - previous_log_likelihood < tolerance)
+                if converged:
+                    break
+                previous_log_likelihood = current_log_likelihood
+
+            log_likelihood = self.get_log_likelihood()
+            self.branch_length_starts.append({'start': name, 'log-likelihood': log_likelihood, 'rounds': rounds,
+                                              'converged': converged})
+            if best_state is None or log_likelihood > best_state[0]:
+                best_state = (log_likelihood, (self.get_branch_lengths(), self.pi_1, self.alpha))
+
+        self.set_parameters_state(*best_state[1])
+        self.get_log_likelihood()
+
+    def get_free_parameters_count(self, per_branch: bool, is_optimize_pi: Optional[bool] = None,
+                                  is_optimize_alpha: Optional[bool] = None) -> int:
+        """
+        Free parameters of a fit: one branch-length coefficient, or every branch length (the bifurcating root's two
+        branches count once -- only their sum is identifiable), plus pi_1 and alpha when they were estimated.
+        """
+        branches_count = len(self.all_nodes_objects) - 1 - (1 if len(self.root.children) == 2 else 0)
+
+        return (branches_count if per_branch else 1) + int(bool(is_optimize_pi)) + int(bool(is_optimize_alpha))
+
+    def get_branch_length_models_table(self) -> pd.DataFrame:
+        """
+        Compare the two branch-length models of a per-branch fit (`is_optimize_bl_per_branch`): input branch lengths
+        times one optimized coefficient (`single_coefficient_fit`), and every branch length optimized (this tree). The
+        per-branch row also reports how many starts ran, how far apart their log-likelihoods ended, how many reached
+        the best one (within 0.1), and whether the best start converged or stopped at the round cap. Branches on the
+        upper bound are saturated: the data cannot tell their length apart from infinity. The single-coefficient
+        model is nested in the per-branch one, so the table reports the likelihood-ratio test with AIC and BIC.
+        Branches resting on the lower bound make the chi-square p-value conservative (the exact null is a
+        chi-bar-square mixture).
+
+        Returns:
+            pd.DataFrame: rows for the two models and their difference.
+        """
+        if self.single_coefficient_fit is None:
+            raise ValueError('No per-branch fit: build the tree with is_optimize_bl_per_branch=True.')
+        single = self.single_coefficient_fit
+        estimates_pi, estimates_alpha = single['is_optimize_pi'], single['is_optimize_alpha']
+
+        start_log_likelihoods = np.asarray([start['log-likelihood'] for start in self.branch_length_starts])
+        best_start = self.branch_length_starts[int(np.argmax(start_log_likelihoods))]
+        models = (('single coefficient', single['log-likelihood'], single['pi_1'], single['alpha'],
+                   single['coefficient_bl'], single['branch_lengths'], False,
+                   {'starts': 1, 'starts log-likelihood range': 0.0, 'starts reaching the best': 1,
+                    'best start': 'input lengths', 'rounds': None, 'converged': True}),
+                  ('per-branch', self.get_log_likelihood(), self.pi_1, self.alpha, self.coefficient_bl,
+                   self.get_branch_lengths(), True,
+                   {'starts': len(start_log_likelihoods),
+                    'starts log-likelihood range': np.ptp(start_log_likelihoods),
+                    'starts reaching the best': int(np.sum(start_log_likelihoods >= start_log_likelihoods.max() - 0.1)),
+                    'best start': best_start['start'],
+                    'rounds': best_start['rounds'],
+                    'converged': best_start['converged']}))
+
+        rows = []
+        for name, log_likelihood, pi_1, alpha, coefficient_bl, lengths, is_per_branch, summary in models:
+            parameters_count = self.get_free_parameters_count(is_per_branch, estimates_pi, estimates_alpha)
+            rows.append({'model': name,
+                         'log-likelihood': log_likelihood,
+                         'free parameters': parameters_count,
+                         'AIC': 2 * parameters_count - 2 * log_likelihood,
+                         'BIC': parameters_count * np.log(self.msa_length) - 2 * log_likelihood,
+                         'pi_1': pi_1,
+                         'alpha': alpha,
+                         'coefficient of branch lengths': coefficient_bl,
+                         'total tree length': lengths.sum(),
+                         'branches at lower bound': int(np.sum(lengths <= self.branch_length_bounds[0] * (1 + 1e-9))),
+                         'branches at upper bound': int(np.sum(lengths >= self.branch_length_bounds[1] * (1 - 1e-9))),
+                         **summary})
+
+        likelihood_ratio = max(2 * (rows[1]['log-likelihood'] - rows[0]['log-likelihood']), 0.0)
+        degrees_of_freedom = rows[1]['free parameters'] - rows[0]['free parameters']
+        difference = {'model': 'difference (per-branch - single coefficient)'}
+        for key in ('log-likelihood', 'free parameters', 'AIC', 'BIC', 'total tree length', 'branches at lower bound',
+                    'branches at upper bound'):
+            difference[key] = rows[1][key] - rows[0][key]
+        difference.update({'LRT statistic': likelihood_ratio,
+                           'LRT p-value': distributions.chi2.sf(likelihood_ratio, degrees_of_freedom),
+                           'preferred by AIC': rows[int(difference['AIC'] < 0)]['model'],
+                           'preferred by BIC': rows[int(difference['BIC'] < 0)]['model']})
+        rows.append(difference)
+
+        return pd.DataFrame(rows)
+
+    def branch_length_models_to_tsv(self, file_name: str = 'BranchLengthModels.tsv', sep: str = '\t') -> str:
+        self.make_dir(file_name)
+        self.get_branch_length_models_table().to_csv(file_name, index=False, sep=sep, float_format='%.8f')
+
+        return file_name
+
+    def get_distances_to_leaves(self) -> np.ndarray:
+        self.get_leaves()
+
+        return np.asarray(self.get_branch_lengths())
+
+    def set_distances_to_root(self) -> None:
+        for current_node in self.all_nodes_objects:
+            if current_node.father:
+                current_node.distance_to_root_vector = (current_node.father.distance_to_root_vector +
+                                                        [current_node.distance_to_father])
+                current_node.distance_to_root = round(sum(current_node.distance_to_root_vector), 14)
+        for current_node in self.all_nodes_objects:
+            current_node.set_levels_and_distance_to_nearest()
+
     def optimize_alpha(self, is_optimize_alpha: Optional[bool] = None) -> None:
         if is_optimize_alpha:
             self.alpha = self.optimize(func=self.alpha_optimization, bracket=(0.5, ), bounds=(0.1, 20), result_fild='x')
+            self.set_gamma_distribution_categories_vector(self.alpha)
             self.set_vars()
 
     def optimize_pi(self, is_optimize_pi: Optional[bool] = None, is_optimize_pi_average: Optional[bool] = None,
@@ -1367,6 +2226,7 @@ class Tree:
         for current_node in self.all_nodes_objects:
             current_node.clean_all()
         self.log_likelihood_vector = self.likelihood_vector = self.correlation_vector = self.posterior_rates = None
+        self.correlation_stream = None
         self.log_likelihood = self.likelihood = 0.0
 
     def set_all(self, categories_quantity: Optional[int] = None, alpha: Optional[float] = None,
@@ -1414,12 +2274,20 @@ class Tree:
             frequency = (1 - self.pi_1, self.pi_1)
         else:
             frequency = (1 / self.alphabet_length, 1 / self.alphabet_length)
-        for current_node in self.all_nodes_objects:
+        frequency = np.asarray(frequency, dtype=np.float64)
+
+        # Every node's (rate, parent, child) P-matrix in one vectorized call.
+        distances = np.asarray([current_node.distance_to_father for current_node in self.all_nodes_objects],
+                               dtype=np.float64)
+        branch_lengths = distances[:, np.newaxis] * self.coefficient_bl * np.asarray(self.rate_vector)[np.newaxis, :]
+        pmatrices = Node.get_two_state_pmatrix(self.pi_1, branch_lengths)
+
+        for current_node, pmatrix in zip(self.all_nodes_objects, pmatrices):
             current_node.alphabet = self.alphabet
-            current_node.frequency = np.asarray(frequency, dtype=np.float64)
+            current_node.frequency = frequency
             current_node.pi_1 = self.pi_1
             current_node.coefficient_bl = self.coefficient_bl
-            current_node.pmatrix = np.asarray([current_node.get_pmatrix(r) for r in self.rate_vector], dtype=np.float64)
+            current_node.pmatrix = pmatrix
 
     def get_gamma_distribution_percent_point(self) -> List[float]:
         probability_vector = np.linspace(0, 1, self.categories_quantity + 1)
@@ -1475,6 +2343,9 @@ class Tree:
             self.calculate_up()
 
         likelihoods_per_rate = np.einsum('j,rji->ri', self.root.frequency, self.root.up_vector)
+        rate_weights = Node.get_rate_weights(self.root.up_log_scale)
+        if rate_weights is not None:
+            likelihoods_per_rate = likelihoods_per_rate * rate_weights
         invalid_mask = (likelihoods_per_rate <= 0.0) | np.isnan(likelihoods_per_rate)
         likelihoods_per_rate = np.where(invalid_mask, eps, likelihoods_per_rate)
         weighted = likelihoods_per_rate * prior[:, np.newaxis]
@@ -1482,7 +2353,7 @@ class Tree:
         numerator = np.einsum('r,ri->i', self.rate_vector, weighted)
         posterior = np.divide(numerator, weighted_sum, where=(weighted_sum > 0), out=np.zeros_like(numerator))
 
-        self.posterior_rates = posterior
+        self.posterior_rates = posterior[self.site_pattern_index]
 
     def set_pearson_correlation_vector(self, probability_lg: Union[float, np.float64] = 0.5,
                                        number_lg: Union[float, np.float64, int] = 1) -> None:
@@ -1504,6 +2375,15 @@ class Tree:
         couples = np.column_stack((unique_item[idx1], unique_item[idx2]))
 
         filtered_probs = site_probs_matrix[:, unique_item]
+
+        if len(couples) > pairs.PAIRS_IN_MEMORY_LIMIT:
+            # Too many pairs to hold (4 x float64 per pair): keep only what is needed to stream them
+            # block by block into PearsonCorrelation.tsv, in the same (triu) order.
+            del couples, idx1, idx2
+            self.correlation_vector = None
+            self.correlation_stream = (unique_item, *pairs.centered_rows(filtered_probs.T))
+            return None
+        self.correlation_stream = None
 
         corr_matrix = np.corrcoef(filtered_probs.T)
         r_coefficients = corr_matrix[idx1, idx2]
@@ -1592,23 +2472,27 @@ class Tree:
 
     @staticmethod
     def del_bootstrap_values(newick_text: str) -> str:
-        pattern = r'(?<=\))([^:,()]+)(?=[:;])'
+        replace_mask_pattern = r'[\'\"]'
+        newick_text = re.sub(replace_mask_pattern, '', newick_text)
 
+        pattern = r'(?<=\))([^:,()]+)(?=[:;])'
         raw_matches = re.findall(pattern, newick_text)
         if not raw_matches:
             return newick_text
 
-        only_integers = [int(re.sub(r'^[\[\'](\d+)[\]\']$', r'\1', val)) for val in raw_matches if
-                         val.isdigit() or re.sub(r'^[\[\'](\d+)[\]\']$', r'\1', val).isdigit()]
+        only_int_pattern = r'^[\[\'](\d+)[\]\']$'
+        only_int = [int(re.sub(only_int_pattern, r'\1', val)) for val in raw_matches if val.isdigit() or
+                    re.sub(only_int_pattern, r'\1', val).isdigit()]
 
         is_random_node_ids = False
-        if only_integers:
-            list_length = len(only_integers)
-            set_length = len(set(only_integers))
+        if only_int:
+            list_length = len(only_int)
+            set_length = len(set(only_int))
             if list_length == set_length:
                 is_random_node_ids = True
 
         def replacer(match):
+            nonlocal is_random_node_ids
             val = match.group(1)
 
             if '/' in val or val in ['*', '#']:
@@ -1638,8 +2522,24 @@ class Tree:
         Returns:
             str: A Newick formatted string representing the tree structure.
         """
-        phylo_tree = Phylo.read(StringIO(newick_data), 'newick')
+        with StringIO(newick_data) as string_buffer:
+            phylo_tree = Phylo.read(string_buffer, 'newick')
+
         phylo_tree.root_with_outgroup(leaf_name)
+
+        # Alternative (not active): put the root in the middle of the outgroup leaf's branch. The current
+        # Biopython default above puts the root at the leaf itself (leaf branch length 0, the whole branch moved
+        # to the other side), so the root's reconstructed state is almost that leaf's state.
+        # To use it, replace `phylo_tree.root_with_outgroup(leaf_name)` above with:
+        #
+        # outgroup = phylo_tree.find_any(name=leaf_name)
+        # if outgroup is None:
+        #     raise ValueError(f'Leaf {leaf_name} not found.')
+        # half_length = (outgroup.branch_length or 0.0) / 2
+        # phylo_tree.root_with_outgroup(outgroup, outgroup_branch_length=half_length)
+        # for clade in phylo_tree.root.clades:
+        #     if clade is not outgroup:
+        #         clade.branch_length = half_length
 
         return ''.join(Writer((phylo_tree, )).to_strings(format_branch_length='%1.10f'))
 
@@ -1673,54 +2573,56 @@ class Tree:
 
     @staticmethod
     def calculate_mad_score(clade, x: float, dists: Dict[Any, Dict[Any, float]]) -> float:
+        """Branch ancestor deviation (Tria, Landan & Dagan 2017) with the root on the branch above `clade`, at
+        distance x from it: the root mean square, over ALL leaf pairs (i, j), of r_ij = 2 * d(i, a_ij) / d_ij - 1,
+        where a_ij is the ancestor of i and j in the tree rooted there. Pairs on the same side of the branch count
+        too, because the root decides which node is their ancestor. With D_i the root-to-tip distance,
+        d(i, a_ij) = (D_i + d_ij - D_j) / 2, so r_ij = (D_i - D_j) / d_ij."""
         clade_leaves = clade.get_terminals()
+        clade_leaf_set = set(clade_leaves)
         all_leaves = list(dists.keys())
-        different_leaves = [Leaf for Leaf in all_leaves if Leaf not in clade_leaves]
 
-        deviations = []
+        # Root-to-tip distances. A leaf j outside the clade is reached from a reference leaf i0 inside it via
+        # the clade node: d(i0, j) = d(i0, clade) + d(clade, j), and the root sits x above the clade node.
+        ref_leaf = clade_leaves[0]
+        d_ref = clade.distance(ref_leaf)
+        root_distances = np.array([clade.distance(leaf) + x if leaf in clade_leaf_set
+                                   else dists[ref_leaf][leaf] - d_ref - x for leaf in all_leaves])
+        pair_distances = np.array([[dists[a][b] for b in all_leaves] for a in all_leaves])
 
-        for i in clade_leaves:
-            d_node_i = clade.distance(i)
-            d_root_i = d_node_i + x
-
-            for j in different_leaves:
-                d_ij = dists[i][j]
-
-                if d_ij != 0:
-                    dev = (2 * d_root_i / d_ij) - 1
-                    deviations.append(dev ** 2)
-
-        if not deviations:
+        upper = np.triu_indices(len(all_leaves), k=1)
+        d_ij = pair_distances[upper]
+        diff = (root_distances[:, None] - root_distances[None, :])[upper]
+        valid = d_ij != 0
+        if not valid.any():
             return float('inf')
 
-        return np.sqrt(np.mean(deviations))
+        return float(np.sqrt(np.mean((diff[valid] / d_ij[valid]) ** 2)))
 
     @staticmethod
     def calculate_mvr_x(phylo_tree, clade, dists: Dict[Any, Dict[Any, float]]) -> float:
-        clade_leaves = clade.get_terminals()
+        """Position of the root on the branch above `clade` (distance x from `clade`) that minimises the variance
+        of root-to-tip distances. With the root at x, a leaf inside the clade is at d(clade, leaf) + x and a leaf
+        outside it is at d(clade, leaf) - x (its path from `clade` runs through the whole branch). The variance
+        is minimal when both sides have the same mean root-to-tip distance: x = (mu_out - mu_in) / 2."""
+        clade_leaves = set(clade.get_terminals())
         all_leaves = list(dists.keys())
         different_leaves = [Leaf for Leaf in all_leaves if Leaf not in clade_leaves]
 
         branch_length = clade.branch_length or 0
 
-        n = len(all_leaves)
-        n1 = len(clade_leaves)
+        mu_in = np.mean([clade.distance(Leaf) for Leaf in clade_leaves])
+        mu_out = np.mean([phylo_tree.distance(clade, Leaf) for Leaf in different_leaves])
 
-        mu1 = np.mean([clade.distance(Leaf) for Leaf in clade_leaves])
-        mu2 = np.mean([phylo_tree.distance(clade, Leaf) for Leaf in different_leaves])
-
-        beta = n1 / n
-
-        x = (mu2 - mu1 + branch_length * (1 - 2 * beta)) / (2 * (1 - beta))
+        x = (mu_out - mu_in) / 2
 
         return max(0, min(branch_length, x))
 
     @staticmethod
     def calculate_mvr_score(phylo_tree, clade, x: float, dists: Dict[Any, Dict[Any, float]]) -> float:
-        clade_leaves = clade.get_terminals()
+        """Variance of root-to-tip distances with the root on the branch above `clade`, at distance x from it."""
+        clade_leaves = set(clade.get_terminals())
         all_leaves = list(dists.keys())
-
-        ref_leaf = clade_leaves[0]
 
         root_distances = []
 
@@ -1728,7 +2630,7 @@ class Tree:
             if leaf in clade_leaves:
                 d_root = clade.distance(leaf) + x
             else:
-                d_root = phylo_tree.distance(ref_leaf, leaf) - x
+                d_root = phylo_tree.distance(clade, leaf) - x
             root_distances.append(d_root)
 
         return np.var(root_distances)
@@ -1768,7 +2670,9 @@ class Tree:
             str: A Newick formatted string representing the tree structure.
         """
 
-        phylo_tree = Phylo.read(StringIO(newick_data), 'newick')
+        with StringIO(newick_data) as string_buffer:
+            phylo_tree = Phylo.read(string_buffer, 'newick')
+
         if len(phylo_tree.root.clades) > 2:
             phylo_tree.root_at_midpoint()
 
@@ -1846,9 +2750,9 @@ class Tree:
             columns = columns if columns else {'node': 'Name', 'father_name': 'Parent', distance_name:
                                                'Distance to parent', 'children': 'Children', 'sequence': 'Sequence',
                                                'pmatrix': 'P matrix',
-                                               'up_vector': 'Up vector',
-                                               'down_vector': 'Down vector',
-                                               'marginal_vector': 'Marginal vector',
+                                               # 'up_vector': 'Up vector',
+                                               # 'down_vector': 'Down vector',
+                                               # 'marginal_vector': 'Marginal vector',
                                                'probabilities_sequence_characters': 'Probability coefficient',
                                                'ancestral_sequence': 'Ancestral comparison',
                                                'likelihood': 'Current conditional likelihood (subtree)',
@@ -1858,7 +2762,7 @@ class Tree:
                                                'log_likelihood_vector':
                                                'Vector of current conditional log-likelihood (ln, subtree)'}
             lists = ('children', 'pmatrix', 'up_vector', 'down_vector', 'marginal_vector',
-                     'probabilities_sequence_characters', 'likelihood_vector', 'log_likelihood_vector')
+                     'probabilities_sequence_characters')
             decimals = 8
         elif mode == 'branch_tsv':
             columns = columns if columns else {'father_name': 'Parent node', 'node': 'Child node', distance_name:
@@ -1880,7 +2784,7 @@ class Tree:
     def write_file(file_name: str, file_text: str) -> str:
         try:
             Tree.make_dir(file_name)
-            with open(file_name, 'w') as f:
+            with open(file_name, 'w', encoding='utf-8') as f:
                 f.write(file_text)
         except Exception as e:
             print(f'An error occurred while saving the file: {e}')
@@ -1967,13 +2871,13 @@ class Tree:
     def __set_node(node_str: str, num: Callable) -> Node:
         if node_str.find(':') > -1:
             node_data: List[Union[str, int, float]] = node_str.split(':')
-            node_data[0] = node_data[0] if node_data[0] else 'nd' + str(num()).rjust(4, '0')
+            node_data[0] = node_data[0] if node_data[0] else f'nd{num()}'
             try:
                 node_data[1] = float(node_data[1])
             except ValueError:
                 node_data[1] = 0.0
         else:
-            node_data = [node_str if node_str else 'nd' + str(num()).rjust(4, '0'), 0.0]
+            node_data = [node_str if node_str else f'nd{num()}', 0.0]
 
         newick_node = Node(node_data[0])
         newick_node.distance_to_father = float(node_data[1])
@@ -1981,10 +2885,9 @@ class Tree:
         return newick_node
 
     @staticmethod
-    def __counter():
-        count = 0
+    def __counter(count: int = 0) -> Callable:
 
-        def sub_function():
+        def sub_function() -> int:
             nonlocal count
             count += 1
             return count
@@ -2023,11 +2926,13 @@ class Tree:
 
     @staticmethod
     def fit_beta_null(null_r: np.ndarray, min_fit: int = 100, gof_alpha: float = 0.01) -> Optional[Tuple[float, float]]:
-        """Returns the shape parameters, or `None` if the sample is too small to fit reliably, its
+        """
+        Returns the shape parameters, or `None` if the sample is too small to fit reliably, its
         variance is incompatible with any Beta on [-1, 1] (can happen for a degenerate/near-point
         sample), or the fit fails a goodness-of-fit check against its own bulk. A bad fit must
         never silently produce an overconfident tail p-value, so the caller falls back to
-        `empirical_p` in that case."""
+        `empirical_p` in that case.
+        """
         null_r = np.asarray(null_r, dtype='float64')
         null_r = null_r[np.isfinite(null_r)]
         if null_r.size < min_fit:
@@ -2047,9 +2952,11 @@ class Tree:
 
     @staticmethod
     def beta_p(r: Any, params: Tuple[float, float]) -> Union[np.float64, float]:
-        """P(|R| >= |r|) under a null Beta(a, b, loc=-1, scale=2) fitted by ``fit_beta_null`` --
+        """
+        P(|R| >= |r|) under a null Beta(a, b, loc=-1, scale=2) fitted by ``fit_beta_null`` --
         the continuous analogue of ``empirical_p``'s exceedance count, same [-1, 1] support and
-        the same |r| definition of 'at least as extreme'."""
+        the same |r| definition of 'at least as extreme'.
+        """
         a, b = params
         r_abs = min(abs(r), 1 - eps2)
 
@@ -2091,7 +2998,9 @@ class Tree:
         Returns:
             str: A Newick formatted string representing the tree structure.
         """
-        phylo_tree = Phylo.read(StringIO(newick_data), 'newick')
+        with StringIO(newick_data) as string_buffer:
+            phylo_tree = Phylo.read(string_buffer, 'newick')
+
         all_leaves = phylo_tree.get_terminals()
         dists = {leaf1: {leaf2: phylo_tree.distance(leaf1, leaf2) for leaf2 in all_leaves} for leaf1 in all_leaves}
 
@@ -2140,18 +3049,27 @@ class Tree:
         return phylo_tree
 
     @classmethod
-    def rename_nodes(cls, phylo_tree: Union[str, 'Tree'], node_name: str = 'N', fill_character: str = '0',
-                     number_length: int = 0) -> 'Tree':
+    def rename_nodes(cls, phylo_tree: Union[str, 'Tree'], node_name: str = 'N') -> 'Tree':
         phylo_tree = cls.check_tree(phylo_tree)
-        nodes_list = phylo_tree.nodes_objects
-        num = phylo_tree.__counter()
-        for current_node in nodes_list:
-            if re.fullmatch(r'^nd\d{4}$', current_node.name):
-                current_node.name = f'{node_name}{str(num()).rjust(number_length, fill_character)}'
-            # if re.search(r'^[\'\"](.*)[\'\"]$', current_node.name):
-            #     current_node.name = re.sub(r'^[\'\"](.*)[\'\"]$', r'[\1]', current_node.name)
-            if re.search(r'[\'\"]', current_node.name):
-                current_node.name = re.sub(r'[\'\"]', '', current_node.name)
+
+        nodes_list = pd.Series(phylo_tree.get_nodes(only_node_list=False))
+        change_mask_pattern = r'^nd\d+$'
+        name_change_mask = nodes_list.str.match(change_mask_pattern)
+
+        leaves_list = pd.Series(phylo_tree.get_leaves(only_node_list=False))
+        check_mask_pattern = r'^N(\d+)$'
+        leaves_ids_numbers = leaves_list.str.extract(check_mask_pattern).dropna()[0].astype(int)
+        max_leaves_ids = leaves_ids_numbers.max() if len(leaves_ids_numbers) else 0
+
+        pattern = r'(?<=[(),])N(\d+)(?=:|[),;])'
+        ids = np.asarray(pd.Series(re.findall(pattern, phylo_tree.get_newick(True), flags=re.IGNORECASE))).astype(int)
+        max_ids = ids.max() if len(ids) else 0
+        max_ids = max(max_ids, max_leaves_ids)
+        num = phylo_tree.__counter(max_ids)
+
+        for current_nodename in nodes_list[name_change_mask]:
+            current_node = phylo_tree.all_nodes[current_nodename]
+            current_node.name = f'{node_name}{num()}'
 
         phylo_tree.all_nodes = {current_node.name: current_node for current_node in phylo_tree.all_nodes_objects}
 
@@ -2245,6 +3163,11 @@ class Tree:
         else:
             plt.show()
 
+    def is_rooted(self) -> bool:
+        """A tree is treated as rooted when its root is bifurcating (the same rule `set_root` uses:
+        only trees whose root has more than two children are re-rooted)."""
+        return len(self.root.children) <= 2
+
     @classmethod
     def set_root(cls, newick_data: str, rooting_method: str = 'midpoint', leaf: Optional[Union[str, Node]] = None
                  ) -> str:
@@ -2259,7 +3182,7 @@ class Tree:
             str: A Newick formatted string representing the tree structure.
         """
         phylo_tree = cls(newick_data)
-        if len(phylo_tree.root.children) > 2:
+        if not phylo_tree.is_rooted():
             rooting_method = rooting_method.strip().lower()
             if leaf and rooting_method == 'outgroup':
                 newick_data = cls.set_root_by_outgroup(newick_data, leaf.name if isinstance(leaf, Node) else leaf)

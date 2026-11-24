@@ -22,9 +22,14 @@ rate variation among sites.
 * **Posterior rate estimation** per character (site)
 * **CoPAP analysis** (co-evolution of presence-absence patterns), with p-values from a simulation-based null
   distribution and Benjamini-Hochberg q-values
-* **Parameter optimization** of π1 (frequency of presence), the gamma α parameter and a branch-length scaling coefficient
+* **Parameter optimization** of π1 (frequency of presence), the gamma α parameter and a branch-length scaling coefficient,
+  or of every branch length separately (see [Per-branch branch lengths](#per-branch-branch-lengths))
 * **Parsimony and homoplasy scores** per character (parsimony score, minimum steps, homoplasy, consistency index)
-* **Tree rooting** by MAD, MVR, midpoint or outgroup
+* **Tree rooting** by MAD, MVR, midpoint or outgroup (trees that are already rooted are kept as they are)
+* **Plots of the data**: phylogenetic distance matrix, sequence identity matrix and binary mapping of the
+  presence/absence patterns (see [Plots](#plots)), alongside the CoPAP correlation plots
+* **Large datasets**: outputs that would be too large are capped or drawn in a compact form, and every such case is
+  explained in a note (see [Notes on capped outputs](#notes-on-capped-outputs))
 * **High-performance computing** powered by NumPy vectorization
 
 ### Project structure
@@ -39,6 +44,7 @@ gloome
 │   │   ├── __init__.py
 │   │   ├── node.py
 │   │   ├── npencoder.py
+│   │   ├── pairs.py
 │   │   └── tree.py
 │   ├── __init__.py
 │   ├── __main__.py
@@ -49,7 +55,7 @@ gloome
 └── README.md
 ```
 
-This manual covers input formats, command-line usage, the webserver, and how to interpret the results.
+This manual covers input formats, command-line usage, and how to interpret the results.
 
 ## Input
 
@@ -57,7 +63,8 @@ This manual covers input formats, command-line usage, the webserver, and how to 
   (`1` = presence, `0` = absence, `?` = missing data). All sequences must have the same length, and sequence names
   must match the leaf names of the tree.
 * **Tree** (`--tree_file`): a phylogenetic tree in Newick format with branch lengths. Bootstrap values are removed
-  automatically, and the tree is rooted with the selected `--rooting_method`.
+  automatically. A tree that is already rooted (its root has two children) is kept as it is. An unrooted tree (three
+  or more children at the root) is rooted with the selected `--rooting_method`.
 
 Example:
 
@@ -121,7 +128,7 @@ Results are written to `<out_dir>/<process_id>/`. If `--process_id` is not given
         mvr - Minimum Variance Rooting
         midpoint - Midpoint Rooting
         outgroup - Outgroup Rooting
-        Default is 'midpoint'.
+        Used only for unrooted trees; a rooted tree is kept as it is. Default is 'midpoint'.
 
     --leaf <type=str>
         Leaf to use as the outgroup when --rooting_method is 'outgroup'. Default is ''.
@@ -142,6 +149,12 @@ Model parameters:
     --coefficient_bl <type=float>
         Scaling coefficient applied to all branch lengths, between 0.1 and 10. Default is 1.0.
 
+    --branch_length_min_bound <type=float>
+        Minimum branch length, between 0.0001 and 1. Default is 0.0001.
+
+    --branch_length_max_bound <type=float>
+        Maximum branch length, between 1.0 and 2.0. Default is 2.0.
+
     --is_optimize_pi <type=int>
         Optimize π1 by maximum likelihood (0/1). Default is 1.
 
@@ -154,6 +167,11 @@ Model parameters:
 
     --is_optimize_bl <type=int>
         Optimize the branch-length coefficient by maximum likelihood (0/1). Default is 1.
+
+    --is_optimize_bl_per_branch <type=int>
+        Optimize every branch length separately by maximum likelihood, instead of one coefficient (0/1).
+        When set, it replaces --is_optimize_bl. Slower than the
+        coefficient. Default is 0.
 ```
 
 CoPAP parameters:
@@ -178,22 +196,27 @@ CoPAP parameters:
 Output files (each flag is 0/1 and turns one output file on or off; see [Output files](#output-files)):
 
 ```text
-    --file_interactive_tree_html <type=int>                          Default is 0.
-    --file_newick_tree_png <type=int>                                Default is 0.
+    --file_log_likelihood_tsv <type=int>                             Default is 1.
+    --file_table_of_nodes_tsv <type=int>                             Default is 1.
+    --file_table_of_branches_tsv <type=int>                          Default is 1.
+    --file_branch_position_probabilities_tsv <type=int>              Default is 1.
     --file_table_of_coevolution_tsv <type=int>                       Default is 1.
-    --file_simulated_datasets_fastas <type=int>                      Default is 1.
-    --file_barplot_of_correlation_svg <type=int>                     Default is 1.
-    --file_plot_distribution_of_correlation_svg <type=int>           Default is 1.
-    --file_plot_correlation_by_rate_bin_svg <type=int>               Default is 1.
+    --file_table_of_parsimony_and_homoplasy_scores_tsv <type=int>    Default is 1.
     --file_table_of_posterior_rates_tsv <type=int>                   Default is 1.
     --file_table_of_pearson_correlation_tsv <type=int>               Default is 1.
-    --file_table_of_nodes_tsv <type=int>                             Default is 1.
-    --file_branch_position_probabilities_tsv <type=int>              Default is 1.
-    --file_table_of_branches_tsv <type=int>                          Default is 1.
-    --file_log_likelihood_tsv <type=int>                             Default is 1.
     --file_table_of_attributes_tsv <type=int>                        Default is 1.
-    --file_table_of_parsimony_and_homoplasy_scores_tsv <type=int>    Default is 1.
+    --file_branch_length_models_tsv <type=int>                       Default is 1.
     --file_phylogenetic_tree_nwk <type=int>                          Default is 1.
+    --file_all_nodes_fasta <type=int>                                Default is 1.
+    --file_simulated_datasets_fastas <type=int>                      Default is 1.
+    --file_barplot_of_correlation_svg <type=int>                     Default is 1.
+    --file_plot_correlation_by_rate_bin_svg <type=int>               Default is 1.
+    --file_plot_distribution_of_correlation_svg <type=int>           Default is 1.
+    --file_phylogenetic_distance_matrix_svg <type=int>               Default is 1.
+    --file_sequence_identity_matrix_svg <type=int>                   Default is 1.
+    --file_binary_mapping_svg <type=int>                             Default is 1.
+    --file_interactive_tree_html <type=int>                          Default is 0.
+    --file_newick_tree_png <type=int>                                Default is 0.
 ```
 
 ## Output files
@@ -208,12 +231,43 @@ one rate category.
 
 ### Model and likelihood
 
-| File                   | Contents                                                                                                                                                                                  |
-|------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `TreeAttributes.tsv`   | Final model parameters after optimization: π1, gamma α, number of rate categories, branch-length coefficient, the rate of each gamma category, the alphabet and the total log-likelihood. |
-| `LogLikelihood.tsv`    | Log-likelihood (natural log) of each position, plus a `TOTAL` row with the log-likelihood of the whole dataset. Positions with very low values fit the model poorly.                      |
-| `PosteriorRates.tsv`   | `POS`, `rate`: posterior mean evolutionary rate of each position. Rates above 1 mean the character changes faster than average, rates near 0 mean it is nearly conserved.                 |
-| `PhylogeneticTree.nwk` | The rooted tree used in the analysis, with internal node names and branch lengths after scaling by the coefficient.                                                                       |
+| File                     | Contents                                                                                                                                                                                                                                       |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `TreeAttributes.tsv`     | Final model parameters after optimization: π1, gamma α, number of rate categories, branch-length coefficient, the rate of each gamma category, the alphabet and the total log-likelihood. With per-branch branch lengths the coefficient is 1. |
+| `LogLikelihood.tsv`      | Log-likelihood (natural log) of each position, plus a `TOTAL` row with the log-likelihood of the whole dataset. Positions with very low values fit the model poorly.                                                                           |
+| `PosteriorRates.tsv`     | `POS`, `rate`: posterior mean evolutionary rate of each position. Rates above 1 mean the character changes faster than average, rates near 0 mean it is nearly conserved.                                                                      |
+| `PhylogeneticTree.nwk`   | The rooted tree used in the analysis, with internal node names and branch lengths after scaling by the coefficient (or the fitted branch lengths, with per-branch branch lengths).                                                             |
+| `AllNodes.fasta`         | A comprehensive FASTA file containing sequences for all tree components, covering both internal ancestral nodes and terminal leaf nodes used in the study.                                                                                     |
+| `BranchLengthModels.tsv` | Compares the single-coefficient fit with the per-branch fit, see below.                                                                                                                                                                        |
+
+#### Per-branch branch lengths
+
+By default, GLOOME keeps the relative branch lengths of the input tree and fits one coefficient that scales all of them.
+With `--is_optimize_bl_per_branch 1` (web form: **optimize each branch length**) every branch length is fitted
+separately, together with π1 and α. This is useful when the input branch lengths come from other data, for example
+from sequences, and may not describe how the presence/absence characters evolve.
+
+* Branch lengths are fitted by L-BFGS-B with an exact gradient, alternating with the π1 and α optimization, and are
+  kept between 0.000001 and 50. The two branches below a bifurcating root cannot be told apart from their sum, so
+  their ratio is kept as in the input tree.
+* Different starting points can end in different local optima, so the fit runs from 5 starts: the input lengths, the
+  single-coefficient fit and 3 random variations of it (with a fixed seed, so runs are reproducible). The best one is
+  kept. Each start alternates at most 10 rounds of branch lengths and π1/α.
+* All results (log-likelihood, gain/loss probabilities, ancestral states, CoPAP) then use the fitted branch lengths.
+* It takes longer: seconds for the small examples, about an hour for the largest example (`patternMSA10`).
+
+`BranchLengthModels.tsv` has three rows: `single coefficient`, `per-branch`, and their `difference`.
+
+| Column                                                                            | Meaning                                                                                                                                                                                                                           |
+|-----------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `log-likelihood`, `free parameters`, `AIC`, `BIC`                                 | Fit of each model. The per-branch model has one free parameter per branch instead of one coefficient. Lower AIC/BIC is better.                                                                                                    |
+| `pi_1`, `alpha`, `coefficient of branch lengths`                                  | Fitted parameters of each model.                                                                                                                                                                                                  |
+| `total tree length`                                                               | Sum of the branch lengths (after scaling).                                                                                                                                                                                        |
+| `branches at lower bound`, `branches at upper bound`                              | Branches fitted to 0.000001 or to 50. A branch at the upper bound is saturated: the data cannot tell its length apart from a very long one.                                                                                       |
+| `starts`, `starts log-likelihood range`, `starts reaching the best`, `best start` | How many starts ran, how far apart their results ended, how many reached the best log-likelihood (within 0.1) and which start gave it. If few starts reach the best, the likelihood surface has several optima.                   |
+| `rounds`, `converged`                                                             | Rounds used by the best start, and whether it converged or stopped at the 10-round limit.                                                                                                                                         |
+| `LRT statistic`, `LRT p-value`                                                    | (difference row) Likelihood-ratio test of the single coefficient against per-branch lengths. A small p-value means per-branch lengths fit significantly better. The p-value is conservative when branches are at the lower bound. |
+| `preferred by AIC`, `preferred by BIC`                                            | (difference row) The model with the lower AIC/BIC.                                                                                                                                                                                |
 
 ### Gain and loss
 
@@ -263,78 +317,55 @@ How to read `Coevolution.tsv`:
 |-----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `ParsimonyAndHomoplasyScores.tsv` | Per position: `Minimum Possible Number Of Steps (M)` (number of states observed minus 1), `Parsimony Score (S)` (minimum number of changes on this tree, Fitch algorithm), `Homoplasy Score (H = S - M)` (extra changes caused by convergence or reversal), `Consistency Index (CI = M/S)` (1 means no homoplasy). A `TOTAL` row sums M, S and H over all positions and gives the ensemble CI. |
 
+### Plots
+
+These plots describe the input data (the tree and the presence/absence patterns of the leaves). They are on by
+default and can be turned off one by one.
+
+| File                             | Contents                                                                                                                                                                                                                                                                                                                                                         |
+|----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `PhylogeneticDistanceMatrix.svg` | Heatmap of the phylogenetic (patristic) distance between every pair of leaves: the sum of the branch lengths on the path that joins them through their most recent common ancestor. Darker cells are more distant pairs. Up to 100 leaves the value is printed in every cell (4 decimals).                                                                       |
+| `SequenceIdentityMatrix.svg`     | Heatmap of the % identity between the presence/absence patterns of every pair of leaves: matching positions divided by compared positions × 100. Missing data (`?` or `-`) never counts as a match, and a position is left out only when it is missing in both leaves. Up to 100 leaves the value is printed in every cell (1 decimal).                          |
+| `BinaryMapping.svg`              | The presence/absence matrix itself, one row per leaf and one column per position (numbered from 1 on the plot): `1` cells in salmon, `0` cells in white, missing data in grey. Up to 100 leaves each cell also shows its character, with a consensus row and a per-leaf count beside the matrix. Above 100 leaves the cells are coloured only (compact drawing). |
+
+The matrices and the binary mapping list the leaves in the order of the MSA. For large datasets these plots are
+simplified, see [Notes on capped outputs](#notes-on-capped-outputs).
+
+### Notes on capped outputs
+
+With large datasets some outputs would be too large to write or to open, so GLOOME caps them or draws them in a
+simpler form. Every time this happens the run records a short note for that file:
+
+* on the results page, hover over the file in **View/Download Results** to see its note;
+* all notes of a run are also written to `notes.json` (file name → note).
+
+| Output                                                         | When                             | What is done                                                                                                            |
+|----------------------------------------------------------------|----------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `PhylogeneticDistanceMatrix.svg`, `SequenceIdentityMatrix.svg` | more than 100 leaves             | The values are not printed in the cells (the colour scale gives them) and the figure is scaled to fit.                  |
+| `BinaryMapping.svg`                                            | more than 1,000 positions        | Only positions 1-1,000 are drawn (width limit).                                                                         |
+| `BinaryMapping.svg`                                            | more than 100 leaves             | Compact drawing: cells coloured by state, without the character in each cell or the consensus / count rows.             |
+| `Coevolution.tsv`                                              | more than 2,000,000 tested pairs | Only the 2,000,000 most significant pairs (lowest q-value) are written. The q-values are still computed over all pairs. |
+| `PearsonCorrelation.tsv`                                       | more than 2,000,000 pairs        | Only the 2,000,000 pairs with the strongest correlation (largest \|r\|) are written.                                    |
+| `DistributionOfCorrelation.svg`, `BarplotOfCorrelation.svg`    | more than 200,000 tested pairs   | Drawn from a random sample of 200,000 pairs; the α / β of the Beta fit use the same sample.                             |
+| `CorrelationByRateBin.svg`                                     | more than 20,000 tested pairs    | Shows a random sample of 20,000 pairs.                                                                                  |
+
+Each note gives the actual numbers of the run, for example: "Showing the 2,000,000 most significant pairs (lowest
+q-value) out of N: cut due to the table size limit of 2,000,000 rows.", where N is the number of pairs tested in
+that run.
+
 ### Other files
 
-| File                   | Contents                                                                                                       |
-|------------------------|----------------------------------------------------------------------------------------------------------------|
-| `InteractiveTree.html` | Standalone interactive tree that opens in a browser (off by default).                                          |
-| `VisualTree.png`       | Static picture of the tree (off by default).                                                                   |
-| `*.log`                | Log of the run, with parameters and timings.                                                                   |
-| `<process_id>.zip`     | Archive of all output files.                                                                                   |
+| File                   | Contents                                                                                                                                                     |
+|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `InteractiveTree.html` | Standalone interactive tree that opens in a browser (off by default).                                                                                        |
+| `VisualTree.png`       | Static picture of the tree (off by default).                                                                                                                 |
+| `notes.json`           | Notes for the outputs that were capped or simplified, see [Notes on capped outputs](#notes-on-capped-outputs). Written only when there is at least one note. |                    
+| `*.log`                | Log of the run, with parameters and timings.                                                                                                                 |
+| `<process_id>.zip`     | Archive of all output files.                                                                                                                                 |
 
 ## Webserver
 
 GLOOME is available as a webserver at [gloome.tau.ac.il](https://gloome.tau.ac.il).
-
-### Running an analysis
-
-1. Paste a phyletic pattern MSA (FASTA) and a Newick tree into the text boxes, or upload files. **Load an example**
-   fills in an example dataset, **Clear** resets the form.
-2. Optionally adjust the model parameters, the CoPAP parameters, the rooting method (for outgroup rooting, choose a
-   leaf from the list, which fills in from the tree) and the output files. These options match the
-   [command-line parameters](#command-line-usage).
-3. Optionally enter an e-mail address to get a notification when the job finishes.
-4. Click **SUBMIT**. The page checks the job status every few seconds and shows the results when it finishes.
-   Each run has its own results page at `/results/<process_id>`, which you can bookmark.
-
-### Results page
-
-The results page has four parts.
-
-**Log-likelihood bar.** Shows the total log-likelihood of the tree. Click it to copy the value to the clipboard.
-
-**Interactive tree.**
-
-* Node colors: red = root, orange = internal node, green = leaf.
-* **Hover over a node** to see a short summary of the node in a tooltip. The node grows and changes color.
-* **Hover over a branch** to see a short summary of the branch in a tooltip. The branch turns dark red.
-* **Click a node** to open the **Node information** table below the tree.
-* **Click a branch** to open the **Branch information** table below the tree.
-* Zoom with the mouse wheel or a two-finger trackpad pinch, and drag to move the tree.
-* **show distance to parent** writes each branch length next to its node.
-* **show radial tree** switches between a rectangular and a circular layout.
-
-**Node information table** (one column per position; the last row, `Index`, gives the 0-based position):
-
-| Row                       | Meaning                                                                                                                                             |
-|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Name`, `Node type`       | Node name and type (root, node or leaf).                                                                                                            |
-| `Distance to parent`      | Length of the branch above the node.                                                                                                                |
-| `Sequence`                | Presence/absence at each position: observed for leaves, reconstructed for internal nodes.                                                           |
-| `Probability coefficient` | Posterior probability of the shown state, colored on a scale from red (low) to violet (high). Values near 0.5 mean the reconstruction is uncertain. |
-| `Ancestral Comparison`    | Change from the parent at each position: `A` absence maintained, `L` loss, `G` gain, `P` presence maintained (see the legend next to the tree).     |
-
-Missing data (`?`) in a leaf is shown as `? (x)`, where `x` is the state GLOOME reconstructed for that position.
-
-**Branch information table** (one column per position):
-
-| Row                         | Meaning                                                                  |
-|-----------------------------|--------------------------------------------------------------------------|
-| `Parent node`, `Child node` | The two ends of the branch.                                              |
-| `Branch length`             | Length of the branch.                                                    |
-| `Gain probability`          | Posterior probability of a gain (0 → 1) on this branch at each position. |
-| `Loss probability`          | Posterior probability of a loss (1 → 0) on this branch at each position. |
-
-Probabilities are colored from red (near 0) to violet (near 1), so likely events stand out when you scan a row.
-These rows contain the same values as `Branches.tsv`.
-
-**View/Download Results.** Lists every output file described in [Output files](#output-files).
-**view** opens a file in the browser, **download** saves it. The archive (zip) contains all files.
-
-### Loading previous results
-
-Use **read JSON response file** to upload the `result.json` from an earlier run. The page then shows that run's tree,
-tables and log-likelihood again without recomputing anything.
 
 ## Citing
 If you use GLOOME for your research, please cite the following publication:

@@ -1,3 +1,5 @@
+import traceback
+
 from gloome.config import Config
 
 

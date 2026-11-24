@@ -1,5 +1,6 @@
 import inspect
 import json
+import re
 
 from pathlib import Path
 from typing import Callable, Any, Union, Tuple, Optional, Dict, List
@@ -9,31 +10,12 @@ from numpy import ndarray
 
 from gloome.tree.tree import Tree
 
-FILE_LIST = [
-    'Log-likelihood (tsv)',
-    'Table of nodes (tsv)',
-    'Table of branches (tsv)',
-    'Branch position probabilities (tsv)',
-    'Table of coevolution (tsv)',
-    'Parsimony and homoplasy scores (tsv)',
-    'Table of posterior rates (tsv)',
-    'Table of pearson correlation (tsv)',
-    'Tree attributes (tsv)',
-    'Phylogenetic tree (nwk)',
-    'Simulated datasets (fastas)',
-    'Log-File (log)',
-    'JSON response file (json)',
-    'Barplot of correlation (svg)',
-    'Plot of correlation by rate-bin (svg)',
-    'Plot of distribution of correlation (svg)',
-    'Interactive tree (html)',
-    'Newick tree (svg)',
-    'Newick tree (png)',
-    'Newick tree (txt)',
-    'Archive (zip)'
-]
 SELECTED_FILES = {'file_interactive_tree_html': True,
                   'file_newick_tree_png': True,
+                  'file_phylogenetic_distance_matrix_svg': True,
+                  'file_sequence_identity_matrix_svg': True,
+                  'file_binary_mapping_svg': False,
+                  'file_branch_length_models_tsv': True,
                   'file_table_of_coevolution_tsv': True,
                   'file_simulated_datasets_fastas': True,
                   'file_table_of_posterior_rates_tsv': True,
@@ -47,7 +29,8 @@ SELECTED_FILES = {'file_interactive_tree_html': True,
                   'file_log_likelihood_tsv': True,
                   'file_table_of_attributes_tsv': True,
                   'file_table_of_parsimony_and_homoplasy_scores_tsv': True,
-                  'file_phylogenetic_tree_nwk': True}
+                  'file_phylogenetic_tree_nwk': True,
+                  'file_all_nodes_fasta': True}
 
 
 def get_digit(data: str) -> Union[int, float, str]:
@@ -97,18 +80,24 @@ def del_file(file_path: Union[str, Path]) -> None:
 def read_file(file_path: Union[str, Path], mode: str = 'r') -> str:
     file_path = get_path(file_path)
     if file_path.is_file():
-        with open(file_path, mode) as f:
+        kwargs = {'file': file_path, 'mode': mode}
+        if 'b' in mode:
+            kwargs['encoding'] = 'utf-8'
+        with open(**kwargs) as f:
             return f.read()
 
     return ''
 
 
 def save_file(file_path: Union[str, Path], data: Union[str, Any], mode: str = 'w') -> None:
-    with open(file_path, mode) as f:
+    kwargs = {'file': file_path, 'mode': mode}
+    if 'b' in mode:
+        kwargs['encoding'] = 'utf-8'
+    with open(**kwargs) as f:
         if isinstance(data, str):
             f.write(data)
         else:
-            f.write(dumps_json(data))
+            json.dump(data, f, indent=4, ensure_ascii=False)
 
 
 def loads_json(data: str) -> Any:
@@ -182,6 +171,13 @@ def compute_likelihood_of_tree(newick_tree: Union[str, Tree]) -> Union[List[Unio
     return result
 
 
+def print_dict(curren_dict: Dict[str, str]) -> None:
+    if curren_dict:
+        print()
+        for key, value in curren_dict.items():
+            print(f'{key}: {value}')
+
+
 def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, Path],
                           log_file: Optional[Union[str, Path]] = None,
                           with_internal_nodes: Optional[bool] = True,
@@ -193,6 +189,8 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
                           ) -> Union[Dict[str, str], str]:
     selected_files = (SELECTED_FILES if selected_files is None else selected_files)
     result = {}
+    # Per-file notes shown under the file's name in the results list, keyed like FILE_LIST (e.g. a plot was cut).
+    notes = {}
     newick_tree = Tree.check_tree(newick_tree)
     taking_into_coefficient = newick_tree.coefficient_bl != 1
     use_correlation = newick_tree.msa_length > 1
@@ -200,15 +198,14 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
     use_simulated_datasets_file = selected_files.get('file_simulated_datasets_fastas', False)
     if use_correlation:
         use_coevolution_file = selected_files.get('file_table_of_coevolution_tsv', False)
-        use_barplot_of_correlation_file = selected_files.get('file_barplot_of_correlation_svg', False)
-        use_plot_distribution_of_correlation_file = selected_files.get('file_plot_distribution_of_correlation_svg',
-                                                                       False)
-        use_plot_correlation_by_rate_bin_file = selected_files.get('file_plot_correlation_by_rate_bin_svg', False)
+        use_barplot_of_corr_file = selected_files.get('file_barplot_of_correlation_svg', False)
+        use_plot_distribution_of_corr_file = selected_files.get('file_plot_distribution_of_correlation_svg', False)
+        use_plot_corr_by_rate_bin_file = selected_files.get('file_plot_correlation_by_rate_bin_svg', False)
     else:
         use_coevolution_file = False
-        use_barplot_of_correlation_file = False
-        use_plot_distribution_of_correlation_file = False
-        use_plot_correlation_by_rate_bin_file = False
+        use_barplot_of_corr_file = False
+        use_plot_distribution_of_corr_file = False
+        use_plot_corr_by_rate_bin_file = False
 
     if selected_files.get('file_interactive_tree_html', False):
         result.update({'Interactive tree (html)':
@@ -227,6 +224,8 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
                        newick_tree.pearson_correlation_to_tsv(file_name=f'{file_path}/PearsonCorrelation.tsv',
                                                               probability_lg=probability_lg,
                                                               number_lg=number_lg)})
+        if newick_tree.pearson_correlation_note:
+            notes['Table of pearson correlation (tsv)'] = newick_tree.pearson_correlation_note
     if selected_files.get('file_table_of_nodes_tsv', False):
         result.update({'Table of nodes (tsv)':
                        newick_tree.tree_to_tsv(file_name=f'{file_path}/Nodes.tsv',
@@ -244,6 +243,10 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
     if selected_files.get('file_log_likelihood_tsv', False):
         result.update({'Log-likelihood (tsv)':
                        newick_tree.likelihood_to_tsv(file_name=f'{file_path}/LogLikelihood.tsv')})
+    if (selected_files.get('file_branch_length_models_tsv', False) and
+            newick_tree.single_coefficient_fit is not None):
+        result.update({'Branch length models (tsv)':
+                       newick_tree.branch_length_models_to_tsv(file_name=f'{file_path}/BranchLengthModels.tsv')})
     if selected_files.get('file_table_of_attributes_tsv', False):
         result.update({'Tree attributes (tsv)':
                        newick_tree.attributes_to_tsv(file_name=f'{file_path}/TreeAttributes.tsv')})
@@ -256,17 +259,39 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
                                                        taking_into_coefficient=taking_into_coefficient,
                                                        with_internal_nodes=with_internal_nodes,
                                                        decimal_length=0)})
-    if any((use_simulated_datasets_file, use_coevolution_file, use_barplot_of_correlation_file,
-            use_plot_distribution_of_correlation_file, use_plot_correlation_by_rate_bin_file)) and use_copap:
-        result.update(newick_tree.simulate_datasets(file_path=f'{file_path}',
-                                                    number_datasets=number_datasets,
-                                                    use_simulated_datasets_file=use_simulated_datasets_file,
-                                                    use_coevolution_file=use_coevolution_file,
-                                                    use_barplot_of_correlation_file=use_barplot_of_correlation_file,
-                                                    use_plot_distribution_of_correlation_file=
-                                                    use_plot_distribution_of_correlation_file,
-                                                    use_plot_correlation_by_rate_bin_file=
-                                                    use_plot_correlation_by_rate_bin_file))
+    if selected_files.get('file_all_nodes_fasta', False):
+        result.update({'All-nodes (fasta)':
+                       newick_tree.tree_to_fasta_file(file_name=f'{file_path}/AllNodes.fasta',
+                                                      with_internal_nodes=True)})
+    if selected_files.get('file_phylogenetic_distance_matrix_svg', False):
+        result.update({'Phylogenetic distance matrix (svg)': newick_tree.tree_to_phylogenetic_distance_matrix(
+                           file_name=f'{file_path}/PhylogeneticDistanceMatrix.svg')})
+        matrix_note = newick_tree.get_matrix_note()
+        if matrix_note:
+            notes['Phylogenetic distance matrix (svg)'] = matrix_note
+    if selected_files.get('file_sequence_identity_matrix_svg', False):
+        result.update({'Sequence identity matrix (svg)': newick_tree.tree_to_sequence_identity_matrix(
+                           file_name=f'{file_path}/SequenceIdentityMatrix.svg')})
+        matrix_note = newick_tree.get_matrix_note()
+        if matrix_note:
+            notes['Sequence identity matrix (svg)'] = matrix_note
+    if selected_files.get('file_binary_mapping_svg', False):
+        result.update({'Binary mapping (svg)': newick_tree.tree_to_binary_mapping(
+                           file_name=f'{file_path}/BinaryMapping.svg')})
+        binary_mapping_note = newick_tree.get_binary_mapping_note()
+        if binary_mapping_note:
+            notes.update({'Binary mapping (svg)': binary_mapping_note})
+    if any((use_simulated_datasets_file, use_coevolution_file, use_barplot_of_corr_file,
+            use_plot_distribution_of_corr_file, use_plot_corr_by_rate_bin_file)) and use_copap:
+        result.update(
+            newick_tree.simulate_datasets(file_path=f'{file_path}',
+                                          number_datasets=number_datasets,
+                                          use_simulated_datasets_file=use_simulated_datasets_file,
+                                          use_coevolution_file=use_coevolution_file,
+                                          use_barplot_of_correlation_file=use_barplot_of_corr_file,
+                                          use_plot_distribution_of_correlation_file=use_plot_distribution_of_corr_file,
+                                          use_plot_correlation_by_rate_bin_file=use_plot_corr_by_rate_bin_file))
+        notes.update(newick_tree.coevolution_notes)
 
     if result:
         file_path = get_path(file_path)
@@ -277,6 +302,15 @@ def create_all_file_types(newick_tree: Union[str, Tree], file_path: Union[str, P
 
     if log_file is not None:
         result.update({'Log-File (log)': f'{log_file}'})
+
+    print_dict(result)
+    print_dict(notes)
+
+    if notes:
+        notes_file = file_path.joinpath('notes.json')
+        save_file(file_path=notes_file, data=notes, mode='w')
+        result.update({'Notes file (json)': f'{notes_file}'})
+        result.update({'File notes': notes})
 
     return result
 
@@ -342,6 +376,14 @@ def check_data(*args) -> List[Tuple[str, str]]:
     file_phylogenetic_tree_nwk = bool(args[29])
     rooting_method = args[30].strip()
     leaf = args[31].strip()
+    is_optimize_bl_per_branch = bool(args[32])
+    file_branch_length_models_tsv = bool(args[33])
+    branch_length_min_bound = float(args[34])
+    branch_length_max_bound = float(args[35])
+    file_all_nodes_fasta = bool(args[36])
+    file_phylogenetic_distance_matrix_svg = bool(args[37])
+    file_sequence_identity_matrix_svg = bool(args[38])
+    file_binary_mapping_svg = bool(args[39])
 
     if not isinstance(categories_quantity, int) or not 1 <= categories_quantity <= 16:
         err_list.append((f'Number of rate categories value error [ {categories_quantity} ]',
@@ -356,6 +398,14 @@ def check_data(*args) -> List[Tuple[str, str]]:
     if not isinstance(coefficient_bl, float) or not 0.1 <= coefficient_bl <= 10:
         err_list.append((f'Branch lengths (BL) coefficient value error [ {coefficient_bl} ]',
                          f'The value must be between 0.1 and 10.'))
+
+    if not isinstance(branch_length_min_bound, float) or not 0.0001 <= branch_length_min_bound <= 1.0:
+        err_list.append((f'Minimum branch length value error [ {branch_length_min_bound} ]',
+                         f'The value must be between 0.0001 and 1.'))
+
+    if not isinstance(branch_length_max_bound, float) or not 1.0 <= branch_length_max_bound <= 2.0:
+        err_list.append((f'Maximum branch length value error [ {branch_length_max_bound} ]',
+                         f'The value must be between 1.0 and 2.0.'))
 
     if not isinstance(probability_lg, float) or not 0.01 <= probability_lg <= 0.99:
         err_list.append((f'Probability of loss/gain event value error [ {probability_lg} ]',
@@ -384,6 +434,10 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Optimize branch lengths coefficient value error [ {is_optimize_bl} ]',
                          f'The value must be boolean type.'))
 
+    if not isinstance(is_optimize_bl_per_branch, bool):
+        err_list.append((f'Optimize every branch length value error [ {is_optimize_bl_per_branch} ]',
+                         f'The value must be boolean type.'))
+
     if not isinstance(is_do_not_use_copap, bool):
         err_list.append((f'Do not use CoPAP value error [ {is_do_not_use_copap} ]',
                          f'The value must be boolean type.'))
@@ -396,8 +450,13 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Newick tree (png) value error [ {file_newick_tree_png} ]',
                          f'The value must be boolean type.'))
 
+    if not isinstance(file_branch_length_models_tsv, bool):
+        err_list.append((f'Branch length models (tsv) value error '
+                         f'[ {file_branch_length_models_tsv} ]',
+                         f'The value must be boolean type.'))
+
     if not isinstance(file_table_of_coevolution_tsv, bool):
-        err_list.append((f'Coevolution (tsv) value error '
+        err_list.append((f'Table of coevolution (tsv) value error '
                          f'[ {file_table_of_coevolution_tsv} ]',
                          f'The value must be boolean type.'))
 
@@ -458,6 +517,22 @@ def check_data(*args) -> List[Tuple[str, str]]:
         err_list.append((f'Phylogenetic tree (nwk) value error [ {file_phylogenetic_tree_nwk} ]',
                          f'The value must be boolean type.'))
 
+    if not isinstance(file_all_nodes_fasta, bool):
+        err_list.append((f'All-nodes (fasta) value error [ {file_all_nodes_fasta} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_phylogenetic_distance_matrix_svg, bool):
+        err_list.append((f'Phylogenetic distance matrix (svg) value error [ {file_phylogenetic_distance_matrix_svg} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_sequence_identity_matrix_svg, bool):
+        err_list.append((f'Sequence identity matrix (svg) value error [ {file_sequence_identity_matrix_svg} ]',
+                         f'The value must be boolean type.'))
+
+    if not isinstance(file_binary_mapping_svg, bool):
+        err_list.append((f'Binary mapping (svg) value error [ {file_binary_mapping_svg} ]',
+                         f'The value must be boolean type.'))
+
     if not isinstance(rooting_method, str):
         err_list.append((f'Rooting method value error [ {rooting_method} ]', f'The value must be string type.'))
 
@@ -469,6 +544,8 @@ def check_data(*args) -> List[Tuple[str, str]]:
     elif not msa.startswith('>'):
         err_list.append(('MSA error', 'Wrong MSA format. Please provide MSA in FASTA format.'))
     else:
+        replace_mask_pattern = r'[\'\"]'
+        msa = re.sub(replace_mask_pattern, '', msa)
         msa_list = msa.split()
         msa_list_size = len(msa_list)
         if msa_list_size / 2 < 2:
